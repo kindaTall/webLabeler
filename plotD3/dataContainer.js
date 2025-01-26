@@ -1,6 +1,18 @@
 import { api } from './api.js';
 
-export class DataContainer {
+function formatKey(base, index){
+    return `${base}.${index}`;
+}
+
+function labelKey(index){
+    return formatKey("labels", index);
+}
+
+function probabilityKey(index){
+    return formatKey("probabilities", index);
+}
+
+class DataContainer {
     constructor(filename, signal, yConfigs, probabilities) {
         if (signal.length !== yConfigs[0].ubs.at(-1)){
             throw new Error("Length of signal and yConfig.ubs must be equal");
@@ -10,28 +22,73 @@ export class DataContainer {
         this.yConfigs = yConfigs;
         this.probabilities = probabilities;
 
-        // calculate time arrays
-        this.t = DataContainer.linearTime(signal.length, 0, 1 / 1395);
-        this.t_probabilities = DataContainer.linearTime(probabilities[0].length, 8192/1395, 512 / 1395);
-
-        // create labels array
-        this.labels = yConfigs.map(DataContainer.yConfigToArray);
-
-        // calculate integral and noise
-        this.integral = DataContainer.calculateIntegral(signal);
-        this.noise = DataContainer.calculateNoise(signal);
-
-        // Add metadata to arrays
-        this.addDataMeta();
+        const labels = yConfigs.map(DataContainer.yConfigToArray);
+        this.unified = DataContainer.calculateUnified(signal, labels);
+        this.unifiedProbabilities = DataContainer.calculateUnifiedProbabilites(probabilities);
     }
+
+    getContainer(key) {
+         if (key.startsWith("probabilities.")){
+            return this.unifiedProbabilities;
+         }
+         // key is signal, integral, noise, or labels.<i>
+         return this.unified;
+    }
+
+    static calculateUnified(signal, labels) {
+       const mean = d3.mean(signal);
+       const integralIter = DataContainer.generateIntegral(signal, mean);
+       const noiseIter = DataContainer.generateNoise(signal, mean);
+
+       // Convert labels array to object with numbered keys
+       const labelObj = labels.reduce((acc, label, i) => ({
+           ...acc,
+           [labelKey(i)]: label
+       }), {});
+
+       let data = new Array(signal.length);
+       for(let i = 0; i < signal.length; i++) {
+           data[i] = {
+               time: i / 1395,
+               signal: signal[i],
+               integral: integralIter.next().value,
+               noise: noiseIter.next().value,
+               ...Object.entries(labelObj).reduce((acc, [key, arr]) => ({
+                   ...acc,
+                   [key]: arr[i]
+               }), {})
+           };
+       }
+       return data;
+    }
+
+    static calculateUnifiedProbabilites(probabilities) {
+        let data = new Array(probabilities[0].length);
+
+        for (let i = 0; i < probabilities[0].length; i++) {
+            data[i] = {
+                time: (i * 512 + 8191) / 1395 ,
+                ...probabilities.reduce((acc, arr, j) => ({
+                    ...acc,
+                    [probabilityKey(j)]: arr[i]
+                }), {})
+            };
+        }
+        return data;
+    }
+
 
     updateLabels(index, start, end, label){
         label = label == 0.5 ? -1 : label;
         let changes = false;
-        for (let i = start; i < end; i++) {
-            if (this.labels[index][i] !== label){
+        [start, end] = (start < end) ? [start, end] : [end, start];
+        const key = labelKey(index);
+
+
+        for (let i = Math.max(0, start); i < Math.min(end, this.unified.length); i++) {
+            if (this.unified[i][key] !== label){
                 changes = true;
-                this.labels[index][i] = label;
+                this.unified[i][key] = label;
             }
         }
         if (!changes){
@@ -41,70 +98,20 @@ export class DataContainer {
     }
 
     async updateAndSendLabels(index) {
-        this.yConfigs[index] = DataContainer.ArrayToYConfig(this.labels[index]);
+        this.yConfigs[index] = DataContainer.ArrayToYConfig(this.unified, labelKey(index));
         api.updateLabels(this.filename, this.yConfigs);
     }
 
-
-    addDataMeta(data){
-         // add ._min and min(), ._max and max(), to arrays
-        [this.signal, this.t, this.t_probabilities, this.integral, this.noise].forEach(arr => {
-            arr._min = null;
-            arr._max = null;
-            arr.min = function(){
-                if (this._min === null){
-                    this._min = d3.min(this);
-                }
-                return this._min;
-            };
-            arr.max = function(){
-                if (this._max === null){
-                    this._max = d3.max(this);
-                }
-                return this._max;
-            };
-        });
-        [this.t, this.t_probabilities].forEach(arr => {
-            arr._min = arr.at(0);
-            arr._max = arr.at(-1);
-        });
-        [this.labels, this.probabilities].forEach(arrList => {
-            arrList.forEach(arr => {
-                arr.min = () => 0;
-                arr.max = () => 1;
-            });
-        });
-    }
-
-
-    get(key) {
-        if (key.includes('.')){
-            let [arrKey, prop] = key.split('.');
-            return this[arrKey][prop];
-        }
-        return this[key];
-    }
-
-    static linearTime(n, start, step){
-        const output = new Array(n);
-        let value = start;
-        for (let i = 0; i < n; i++) {
-            output[i] = value;
-            value += step;
-        }
-        return output;
-    }
-
-    static ArrayToYConfig(array) {
+    static ArrayToYConfig(array, key) {
         let ubs = [];
         let labels = [];
-        let prev = array[0];
+        let prev = array[0][key];
 
         for (let i = 1; i < array.length; i++) {
-            if (array[i] !== prev){
+            if (array[i][key] !== prev){
                 ubs.push(i);
                 labels.push(prev);
-                prev = array[i];
+                prev = array[i][key];
             }
         }
         ubs.push(array.length);
@@ -124,30 +131,29 @@ export class DataContainer {
         return result;
     }
 
-    static calculateNoise(signal, length=8192){
-        const filtered = this.filter(signal, 20, 1395, 101);
-        const output = new Array(signal.length).fill(0);
+
+    static *generateNoise(signal, mean=null, length=8192){
+        const filtered = this.filter(signal, 20, 1395, 101, mean);
 
         let sum = 0;
+        let i = 0;
 
-        // First, handle the first `subLength` samples
-        for (let i = 0; i < length && i < signal.length; i++) {
-            sum += filtered[i];
-            output[i] = sum / (i + 1); // Average of the first `i+1` samples
+        // first window of 8192 samples
+        for (; i < length && i < filtered.length; i++) {
+            sum += Math.abs(filtered[i]);
         }
-
-        // Then, for the rest of the signal, use sliding window
-        for (let i = length; i < signal.length; i++) {
-            sum += filtered[i];              // Add the next sample in the window
-            sum -= filtered[i - length];     // Remove the sample that's sliding out of the window
-            output[i] = sum / length;        // Average of the last `length` samples
+        for (let j = 0; j < length && j < filtered.length; j++) {
+            yield sum;
         }
-
-        return output;
+        for (; i < filtered.length; i++) {
+            sum += Math.abs(filtered[i]) - Math.abs(filtered[i - length]);
+            yield sum;
+        }
     }
 
-    static zeroMean(signal){
-        let mean = d3.mean(signal);
+
+    static zeroMean(signal, mean=null){
+        mean = mean || d3.mean(signal);
         const output = new Array(signal.length);
         for(let i = 0; i < signal.length; i++) {
             output[i] = signal[i] - mean;
@@ -155,16 +161,15 @@ export class DataContainer {
         return output;
     }
 
-    static calculateIntegral(signal){
-        let integral = this.zeroMean(signal);
-        for (let i = 1; i < integral.length; i++) {
-            integral[i] += integral[i-1];
+    static *generateIntegral(signal, mean=null){
+        mean = mean || d3.mean(signal);
+        let sum = 0;
+        for (let i = 0; i < signal.length; i++) {
+            sum += signal[i] - mean;
+            yield sum;
         }
-        return integral;
     }
 
-
-    // Method to create Hamming window
     static createHamming(length) {
         const window = new Array(length);
         for (let n = 0; n < length; n++) {
@@ -173,7 +178,6 @@ export class DataContainer {
         return window;
     }
 
-    // Method to create sinc function (ideal low-pass filter)
     static createSinc(length, cutoffFrequency, sampleRate) {
         const sinc = new Array(length);
         const center = (length - 1) / 2;
@@ -191,7 +195,6 @@ export class DataContainer {
         return sinc;
     }
 
-    // Method to create filter coefficients (Hamming window + sinc function)
     static createFilter(length, cutoffFrequency, sampleRate) {
         const sinc = this.createSinc(length, cutoffFrequency, sampleRate);
         const window = this.createHamming(length);
@@ -200,7 +203,6 @@ export class DataContainer {
         return sinc.map((value, index) => value * window[index]);
     }
 
-    // Method to filter a signal (backwards and forwards with passed filter coefficients)
     static filterSignal(signal, filterCoefficients) {
         // Apply the filter forward (using convolution)
         const forwardFiltered = this.applyFilter(signal, filterCoefficients);
@@ -212,7 +214,6 @@ export class DataContainer {
         const output = new Array(signal.length);
         const filterLength = filterCoefficients.length;
 
-        signal = this.zeroMean(signal);
         for (let i = 0; i < signal.length; i++) {
             let sum = 0;
             for (let j = 0; j < filterLength; j++) {
@@ -225,8 +226,11 @@ export class DataContainer {
         return output;
     }
 
-    static filter(signal, cutoffFrequency, sampleRate, nTaps) {
+    static filter(signal, cutoffFrequency, sampleRate, nTaps, mean=null) {
+        signal = this.zeroMean(signal, mean);
         const filterCoefficients = this.createFilter(nTaps, cutoffFrequency, sampleRate);
         return this.filterSignal(signal, filterCoefficients);
     }
 }
+
+export { DataContainer };

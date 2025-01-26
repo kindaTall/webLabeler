@@ -17,7 +17,7 @@ export class Plotter {
         this.brush = d3.brushX()
             .extent([[0, 0], [this.width, this.height]])
             .on("end", (event) => this.brushed(event));
-        this.baseViewDomain = [0, this.data.t.at(-1)];
+        this.baseViewDomain = [0, this.data.unified.at(-1).time];
         this.viewDomain = this.baseViewDomain;
         this.verticalLines = [];
 
@@ -69,7 +69,7 @@ export class Plotter {
                     }
                     console.log("labeling from", this.verticalLines[0], "to", this.verticalLines[1], "with", label);
 
-                    let indices = this.verticalLines.map(x=>Math.max(0, Math.min(this.data.labels[this.labelingIndex].length-1, Math.round(x*1395))));
+                    let indices = this.verticalLines.map(x=>Math.round(x*1395));
                     this.data.updateLabels(this.labelingIndex, indices[0], indices[1], label);
                     this.verticalLines = [];
                     this.updateLines();
@@ -146,21 +146,19 @@ export class Plotter {
         let yMax = -Infinity;
 
         Object.entries(plotConfig.series).forEach(([seriesName, seriesConfig]) => {
-            const x = this.data.get(seriesConfig.xKey);
-            const y = this.data.get(seriesConfig.yKey);
-            if (!x || !y) return;
+            const container = this.data.getContainer(seriesConfig.yKey);
+            if (!container) return;
 
-            const xMinCand = x.min();
-            const xMaxCand = x.max();
-            const yMinCand = y.min();
-            const yMaxCand = y.max();
+            const xMinCand = container[0].time;
+            const xMaxCand = container.at(-1).time;
+            const yMinCand = d3.min(container, d => d[seriesConfig.yKey]);
+            const yMaxCand = d3.max(container, d => d[seriesConfig.yKey]);
 
             xMin = xMin > xMinCand ? xMinCand : xMin;
             xMax = xMax < xMaxCand ? xMaxCand : xMax;
             yMin = yMin > yMinCand ? yMinCand : yMin;
             yMax = yMax < yMaxCand ? yMaxCand : yMax;
         });
-
         return {
             xDomain: [xMin, xMax],
             yDomain: [yMin, yMax]
@@ -197,12 +195,9 @@ export class Plotter {
             const defaultStyle = this.config.defaultStyle;
 
             const lineGen = d3.line()
-                .x(j => scales.x(this.data.get(xKey)[j]))
-                .y(j => scales.y(this.data.get(yKey)[j]))
-                .defined(j => {
-                    const value = this.data.get(yKey)[j];
-                    return value !== -1 && value !== undefined;
-                });
+                .x(d => scales.x(d.time))
+                .y(d => scales.y(d[yKey]))
+                .defined(d => d[yKey] !== -1 && d[yKey] !== undefined);
 
             const path = g.append("path")
                 .attr("class", "line")
@@ -217,19 +212,18 @@ export class Plotter {
 
     updateLines() {
         const [x0, x1] = this.viewDomain;
-
         this.plots.forEach(plot => {
             plot.scales.x.domain([x0, x1]);
 
             plot.lines.forEach(line => {
-                const x = this.data.get(line.xKey);
-                const c = x[0];
-                const m = x[1] - x[0]
-                const [start, stop] = [x0, x1].map(a=>Math.max(0, Math.min(x.length-1, Math.round((a - c) / m))));
-                let filteredIndices = this.linspace(start, stop, this.width, true, Math.round);
+                let container = this.data.getContainer(line.yKey);
+                const c = container[0].time;
+                const m = container[1].time - container[0].time;
+                const [start, stop] = [x0, x1].map(a=>Math.max(0, Math.min(container.length, Math.round((a - c) / m))));
+                const lttbData = largestTriangleThreeBuckets(container.slice(start, stop), this.width, 'time', line.yKey);
 
                 line.path
-                    .datum(filteredIndices)
+                    .datum(lttbData)
                     .attr("d", line.lineGen);
             });
 

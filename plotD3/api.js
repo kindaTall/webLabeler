@@ -5,7 +5,9 @@ class APIService {
 
    async getFileList() {
        const response = await fetch(`${this.baseURL}/get-file-list`);
-       return await response.json();
+       const text = await response.text();
+       const json = JSON.parse(text);
+       return json;
    }
 
    async getFileMeta(filename) {

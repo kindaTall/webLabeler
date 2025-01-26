@@ -1,0 +1,3 @@
+[submodule "plotD3/external/lttb"]
+	path = plotD3/external/lttb
+	url = https://github.com/joshcarr/largest-triangle-three-buckets.js.git

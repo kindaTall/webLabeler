@@ -1,7 +1,7 @@
 import { DataContainer, buildPreload } from "./DataContainer.js";
 import { api } from './api.js';
 
-const DEFAULT_CACHE_SIZE = 3;
+const DEFAULT_CACHE_SIZE = 0;
 
 class FileSelector {
     constructor(fileChangedCallback) {

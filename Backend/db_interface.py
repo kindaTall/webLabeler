@@ -1,10 +1,33 @@
+import abc
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
+@dataclass
+class FileInformation:
+    x: np.ndarray
+    p: list
+    label: list
 
-class MockDB:
+
+class DBInterface(abc.ABC):
+    @abc.abstractmethod
+    def get_files(self):
+        pass
+
+    @abc.abstractmethod
+    def load_file(self, file_name)  -> FileInformation:
+        pass
+
+    @abc.abstractmethod
+    def set_file_yconfig(self, file_name, yconfig):
+        pass
+
+
+
+class MockDB(DBInterface):
     def __init__(self):
         self.base = Path('C:\DatenSenvis\RelabelingTasks\Herbstrose-exits-only')
         self.files = {f.parent.stem: f for f in self.base.glob('*/x.npy')}
@@ -19,11 +42,7 @@ class MockDB:
 
         label = self.get_ycconfig(file_name, len(x))
 
-        return {
-            'x': x,
-            'p': p,
-            'label': label,
-        }
+        return FileInformation(x, p, label)
 
     def get_yconfig_filename(self, file_name):
         return self.files[file_name].with_name('yconfig.json')

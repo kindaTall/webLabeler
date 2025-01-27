@@ -81,6 +81,16 @@ class SeriesConfig {
     }
 }
 
+class ScalingConfig {
+    constructor(autoScale){
+        this.autoScale = autoScale;
+        this.quantileRange = {lower: 0.025, upper: 0.975};
+        this.expansionFactor = 0.25;
+        this.fixedYRange = null;
+    }
+}
+
+
 class PlotConfig {
     constructor({
         series = {},
@@ -88,8 +98,7 @@ class PlotConfig {
     } = {}) {
         this.series = {};
         this.defaultStyle = new SeriesStyle(defaultStyle);
-        this.autoScale = series?.autoScale || false;
-        this.isManualScaled = false;
+        this.scalingConfig = new ScalingConfig(series?.autoScale || false);
 
         for (const [seriesName, config] of Object.entries(series.series)) {
             this.addSeries(seriesName, config);

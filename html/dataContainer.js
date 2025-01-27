@@ -43,8 +43,23 @@ class DataContainer {
 
         const labels = yConfigs.map(DataContainer.yConfigToArray);
         this.unified = DataContainer.calculateUnified(signal, labels, noiseArray);
-        this.unifiedProbabilities = DataContainer.calculateUnifiedProbabilites(probabilities);
+        this.unifiedProbabilities = DataContainer.calculateUnifiedProbabilities(probabilities);
         this.metaData = metaData || new Map();
+
+        const iirCalculator = new Fili.CalcCascades();
+
+        const filterCoeff = iirCalculator.lowpass({
+            order: 3, // cascade 3 biquad filters (max: 12)
+            characteristic: 'butterworth',
+            Fs: 1000, // sampling frequency
+            Fc: 100, // cutoff frequency / center frequency for bandpass, bandstop, peak
+            BW: 1, // bandwidth only for bandstop and bandpass filters - optional
+            gain: 0, // gain for peak, lowshelf and highshelf
+            preGain: false // adds one constant multiplication for highpass and lowpass
+            // k = (1 + cos(omega)) * 0.5 / k = 1 with preGain == false
+        });
+
+        this.iirFilter = new Fili.IirFilter(filterCoeff);
     }
 
     getMetaData(key){
@@ -67,7 +82,7 @@ class DataContainer {
         }
         for(const base of ['integral', 'noise']){
             if (key === base){
-                return DataContainer.calculateMetaDataFromArray(this.unified, base);
+                return DataContainer.calculateMetaDataFromArray(this.unified[base]);
             }
         };
         throw new Error(`Unknown key: ${key}`);
@@ -100,38 +115,37 @@ class DataContainer {
         const integralIter = DataContainer.generateIntegral(signal, mean);
         const noiseIter = noiseArray ? noiseArray.values() : DataContainer.generateNoise(signal, mean);
 
-        // Convert labels array to object with numbered keys
-        const labelObj = labels.reduce((acc, label, i) => ({
-           ...acc,
-           [labelKey(i)]: label
-        }), {});
-
-        let data = new Array(signal.length);
-        for(let i = 0; i < signal.length; i++) {
-            data[i] = {
-               time: i / 1395,
-               signal: signal[i],
-               integral: integralIter.next().value,
-               noise: noiseIter.next().value,
-            };
-            for (let j = 0; j < labels.length; j++) {
-                data[i][labelKey(j)] = labels[j][i];
-            }
+        const time = new Float32Array(signal.length);
+        for (let i = 0; i < signal.length; i++) {
+            time[i] = i / 1395;
         }
+
+        let data = {
+            time: time,
+            signal: signal,
+            integral: Float64Array.from(integralIter),
+            noise: noiseArray ? noiseArray : Float64Array.from(DataContainer.generateNoise(signal, mean)),
+        }
+        for (let i = 0; i < labels.length; i++) {
+            data[labelKey(i)] = labels[i];
+        }
+
         return data;
     }
 
-    static calculateUnifiedProbabilites(probabilities) {
-        let data = new Array(probabilities[0].length);
+    static calculateUnifiedProbabilities(probabilities) {
 
+        const time = new Float32Array(probabilities[0].length);
+        const timeIncr = 512 / 1395;
+        let timeItr = 8191 / 1395;
         for (let i = 0; i < probabilities[0].length; i++) {
-            data[i] = {
-                time: (i * 512 + 8191) / 1395 ,
-                ...probabilities.reduce((acc, arr, j) => ({
-                    ...acc,
-                    [probabilityKey(j)]: arr[i]
-                }), {})
-            };
+            time[i] = timeItr;
+            timeItr += timeIncr;
+        };
+
+        const data = {time};
+        for (let i = 0; i < probabilities.length; i++) {
+            data[probabilityKey(i)] = probabilities[i];
         }
         return data;
     }
@@ -143,11 +157,10 @@ class DataContainer {
         [start, end] = (start < end) ? [start, end] : [end, start];
         const key = labelKey(index);
 
-
-        for (let i = Math.max(0, start); i < Math.min(end, this.unified.length); i++) {
-            if (this.unified[i][key] !== label){
+        for (let i = Math.max(0, start); i < Math.min(end, this.unified[key].length); i++) {
+            if (this.unified[key][i] !== label){
                 changes = true;
-                this.unified[i][key] = label;
+                this.unified[key][i] = label;
             }
         }
         if (!changes){
@@ -164,15 +177,17 @@ class DataContainer {
     static ArrayToYConfig(array, key) {
         let ubs = [];
         let labels = [];
-        let prev = array[0][key];
+        array = array[key];
+        let prev = array[0];
 
-        for (let i = 1; i < array.length; i++) {
-            if (array[i][key] !== prev){
+       for (let i = 1; i < array.length; i++) {
+            if (array[i]!== prev){
                 ubs.push(i);
                 labels.push(prev);
-                prev = array[i][key];
+                prev = array[i];
             }
         }
+
         ubs.push(array.length);
         labels.push(prev);
         return {ubs, labels};
@@ -192,7 +207,9 @@ class DataContainer {
 
 
     static *generateNoise(signal, mean=null, length=8192){
-        const filtered = this.filter(signal, 20, 1395, 101, mean);
+        const filtered = this.filter(signal, 20, 1395, 21, mean);
+        const filtered2 = this.iirFilter.multiStep(signal);
+
 
         let sum = 0;
         let i = 0;

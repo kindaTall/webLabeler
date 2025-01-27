@@ -17,7 +17,7 @@ export class Plotter {
         this.brush = d3.brushX()
             .extent([[0, 0], [this.width, this.height]])
             .on("end", (event) => this.brushed(event));
-        this.baseViewDomain = [0, this.data.unified.at(-1).time];
+        this.baseViewDomain = [0, this.data.unified.time.at(-1)];
         this.viewDomain = this.baseViewDomain;
         this.verticalLines = [];
 
@@ -32,6 +32,7 @@ export class Plotter {
     destroy() {
         this.container.selectAll("svg").remove();
         this.container.selectAll("button").remove();
+        this.container.selectAll("div").remove();
     }
 
     setupUI(){
@@ -146,7 +147,10 @@ export class Plotter {
             .attr("text-anchor", "middle")
             .text(name);
 
-        const plotData = this.getPlotData(plotConfig);
+        const plotData = plotConfig.scalingConfig.autoScale ?
+                    { xDomain: this.baseViewDomain, yDomain: [0, 1]} :
+                    this.getPlotData(plotConfig);
+                    
         const scales = this.createScales(plotData);
 
         this.createAxes(g, scales);
@@ -169,8 +173,8 @@ export class Plotter {
             const container = this.data.getContainer(seriesConfig.yKey);
             if (!container) return;
 
-            const xMinCand = container[0].time;
-            const xMaxCand = container.at(-1).time;
+            const xMinCand = container.time[0];
+            const xMaxCand = container.time.at(-1);
             const metaData = this.data.getMetaData(seriesConfig.yKey);
             const yMinCand = metaData.min;
             const yMaxCand = metaData.max;
@@ -216,9 +220,9 @@ export class Plotter {
             const defaultStyle = this.config.defaultStyle;
 
             const lineGen = d3.line()
-                .x(d => scales.x(d.time))
-                .y(d => scales.y(d[yKey]))
-                .defined(d => d[yKey] !== -1 && d[yKey] !== undefined);
+                .x((_, i, data) => scales.x(data.time[i]))
+                .y((_, i, data) => scales.y(data[yKey][i]))
+                .defined((_, i, data) => data[yKey][i] !== -1 && data[yKey][i] !== undefined);
 
             const path = g.append("path")
                 .attr("class", "line")
@@ -235,42 +239,99 @@ export class Plotter {
         const [x0, x1] = this.viewDomain;
         this.plots.forEach(plot => {
             plot.scales.x.domain([x0, x1]);
-
-            var domainMin = Infinity,
-                domainMax = -Infinity;
-            const autoScale = plot.plotConfig.autoScale && !plot.plotConfig.isManualScaled;
-
-            plot.lines.forEach(line => {
-                let container = this.data.getContainer(line.yKey);
-                const c = container[0].time;
-                const m = container[1].time - container[0].time;
-                const [start, stop] = [x0, x1].map(a=>Math.max(0, Math.min(container.length, Math.round((a - c) / m))));
-                const lttbData = largestTriangleThreeBuckets(container.slice(start, stop), this.width, 'time', line.yKey);
-
-                line.path
-                    .datum(lttbData)
-                    .attr("d", line.lineGen);
-
-                if (autoScale){
-                    domainMin = Math.min(domainMin, d3.min(lttbData, d => d[line.yKey]));
-                    domainMax = Math.max(domainMax, d3.max(lttbData, d => d[line.yKey]));
-                }
-            });
-
-            if (autoScale){
-                plot.scales.y.domain([domainMin, domainMax]);
-                plot.g.select(".y-axis").call(d3.axisLeft(plot.scales.y));
-            }
-
-            plot.g.select(".x-axis").call(d3.axisBottom(plot.scales.x));
+            this.gatherLTTBData(plot, x0, x1);
+            this.updateYScale(plot);
+            this.updatePaths(plot);
+            this.updateAxes(plot);
         });
         this.updateVerticalLines();
     }
+    
+    gatherLTTBData(plot, x0, x1) {
+        plot.lines.forEach(line => {
+            const container = this.data.getContainer(line.yKey);
+            const [start, stop] = this.calculateIndexRange(container, x0, x1);
+//            line.lttbData = largestTriangleThreeBuckets(
+//                container.slice(start, stop),
+//                this.width,
+//                'time',
+//                line.yKey
+//            );
+            line.lttbData = largestTriangleThreeBucketsRF(
+                {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
+                this.width,
+                'time',
+                line.yKey
+            );
+//            const yData = new Int32Array(this.data.unified.slice(start, stop).map(d => d['signal']));
+//            const xData = new Int32Array(stop-start);
+//            for(let i = 0; i < stop-start; i++) xData[i] = i;
+//            const lttb = largestTriangleThreeBucketsRF({time: xData, signal: yData}, this.width, 'time', 'signal');
+//
+//            console.log(lttb);
 
-    linspace(start, end, n, endpoint=true, cast=(x)=>x) {
-        const div = endpoint ? n - 1 : n;
-        const step = (end - start) / div;
-        return Array.from({ length: n }, (_, i) => cast(start + step * i));
+        });
+    }
+    
+    calculateIndexRange(container, x0, x1) {
+        const c = container.time[0];
+        const m = container.time[1] - container.time[0];
+        return [x0, x1].map(a => 
+            Math.max(0, Math.min(container.time.length, Math.round((a - c) / m)))
+        );
+    }
+    
+    updateYScale(plot) {
+        if (!plot.plotConfig.scalingConfig.autoScale) return;
+
+        const domains = plot.lines.map(line =>
+            this.calculateYScaleSingle(line.lttbData, line.yKey, plot.plotConfig.scalingConfig)
+        );
+        const [min, max] = [
+            Math.min(...domains.map(d => d[0])),
+            Math.max(...domains.map(d => d[1]))
+        ];
+
+        plot.scales.y.domain([min, max]);
+    }
+
+    calculateYScaleSingle(array, key, scalingConfig){
+//        const [q05, q95] = [d3.quantile(array, scalingConfig.quantileRange.lower, d=>d[key]),
+//                            d3.quantile(array, scalingConfig.quantileRange.upper, d=>d[key])];
+//        const [min, max] = [d3.min(array, d=>d[key]), d3.max(array, d=>d[key])];
+        const [q05, q95] = [d3.quantile(array[key], scalingConfig.quantileRange.lower),
+                            d3.quantile(array[key], scalingConfig.quantileRange.upper)];
+        const [min, max] = [d3.min(array[key]), d3.max(array[key])];
+        return this.calculateExpandedRange(q05, q95, min, max, scalingConfig);
+    }
+    
+    calculateExpandedRange(min, max, q05, q95, scalingConfig) {
+        const range = q95 - q05;
+        const expandedMin = q05 - range * scalingConfig.expansionFactor;
+        const expandedMax = q95 + range * scalingConfig.expansionFactor;
+        return [
+            Math.max(min, expandedMin),
+            Math.min(max, expandedMax)
+        ];
+    }
+    
+    updatePaths(plot) {
+        plot.lines.forEach(line => {
+            const [x, y] = [line.lttbData.time, line.lttbData[line.yKey]];
+            const lineGen = d3.line()
+                .x((_, i) => plot.scales.x(x[i]))
+                .y((_, i) => plot.scales.y(y[i]))
+                .defined((_, i) => y[i] !== -1 && y[i] !== undefined);
+
+            line.path
+                .datum(line.lttbData.time)
+                .attr("d", lineGen);
+        });
+    }
+    
+    updateAxes(plot) {
+        plot.g.select(".y-axis").call(d3.axisLeft(plot.scales.y));
+        plot.g.select(".x-axis").call(d3.axisBottom(plot.scales.x));
     }
 
     brushed(event) {

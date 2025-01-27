@@ -1,3 +1,6 @@
 [submodule "html/external/lttb"]
 	path = html/external/lttb
 	url = https://github.com/joshcarr/largest-triangle-three-buckets.js.git
+[submodule "html/external/fili"]
+	path = html/external/fili
+	url = https://github.com/markert/fili.js.git

@@ -21,8 +21,8 @@ export class Controller {
                 }
                 const config = this.getConfig();
                 this.plotter = new Plotter(data, "plot", config);
-                this.audioPlayer.setData(data);
-                this.fileLoader.preloadFiles(preloadFiles);
+                // this.audioPlayer.setData(data);
+                // this.fileLoader.preloadFiles(preloadFiles);
             });
     }
 

@@ -2,34 +2,56 @@
 const DEFAULT_CONFIG = {
     plots: {
         "Label": {
-            "labels": {
-                xKey: "t",
-                yKey: "labels.0",
-                style: { strokeWidth: 4, color: "red" }
+            "series": {
+                "labels[0]": {
+                    xKey: "t",
+                    yKey: "labels.0",
+                    style: { strokeWidth: 4, color: "red" }
+                },
+                "probabilities[0]": {
+                    xKey: "t_probabilities",
+                    yKey: "probabilities.0",
+                    style: { strokeWidth: 1.5, color: "red" }
+                },
+                "labels[1]": {
+                    xKey: "t",
+                    yKey: "labels.1",
+                    style: { strokeWidth: 4, color: "blue" }
+                },
+                "probabilities[1]": {
+                    xKey: "t_probabilities",
+                    yKey: "probabilities.1",
+                    style: { strokeWidth: 1.5, color: "blue" }
+                }
             },
-            "probabilities": {
-                xKey: "t_probabilities",
-                yKey: "probabilities.0",
-                style: { strokeWidth: 1.5, color: "red" }
-            }
+            "autoScale": false
         },
         "Signal": {
-            "signal": {
-                xKey: "t",
-                yKey: "signal"
-            }
+            "series": {
+                "signal": {
+                    xKey: "t",
+                    yKey: "signal"
+                }
+            },
+            "autoScale": true
         },
         "Integral": {
-            "integral": {
-                xKey: "t",
-                yKey: "integral"
-            }
+            "series": {
+                "integral": {
+                    xKey: "t",
+                    yKey: "integral"
+                }
+            },
+            "autoScale": true
         },
         "Noise": {
-            "noise": {
-                xKey: "t",
-                yKey: "noise"
-            }
+            "series": {
+                "noise": {
+                    xKey: "t",
+                    yKey: "noise"
+                }
+            },
+            "autoScale": true
         }
     }
 };
@@ -66,8 +88,10 @@ class PlotConfig {
     } = {}) {
         this.series = {};
         this.defaultStyle = new SeriesStyle(defaultStyle);
+        this.autoScale = series?.autoScale || false;
+        this.isManualScaled = false;
 
-        for (const [seriesName, config] of Object.entries(series)) {
+        for (const [seriesName, config] of Object.entries(series.series)) {
             this.addSeries(seriesName, config);
         }
     }

@@ -23,6 +23,7 @@ export class AudioPlayer {
 
     setupUI() {
         this.playButton = this.container.append("button")
+            .attr("class", "btn btn-outline-primary me-2")
             .text("Play")
             .style("display", "none")
             .on("click", () => this.toggle());

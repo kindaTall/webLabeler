@@ -12,19 +12,79 @@ function probabilityKey(index){
     return formatKey("probabilities", index);
 }
 
+
+function buildPreload(filename, signal, yConfigs, probabilities){
+    // most expensive is building noise. only precalculate noise.
+    const noiseArray = Array.from(DataContainer.generateNoise(signal, d3.mean(signal), 8192));
+
+    yConfigs = yConfigs.map(DataContainer.fixYConfig);
+
+    const metaData = new Map();
+    metaData['signal'] = DataContainer.calculateMetaDataFromArray(signal);
+    metaData['noise'] = DataContainer.calculateMetaDataFromArray(noiseArray);
+    for (let i = 0; i < yConfigs.length; i++) {
+        metaData[labelKey(i)] = {min: -1, max: 1};
+        metaData[probabilityKey(i)] = {min: -1, max: 1};
+    }
+
+    return {x: signal, label: yConfigs, p: probabilities, noise: noiseArray, metaData: metaData};
+}
+
+
 class DataContainer {
-    constructor(filename, signal, yConfigs, probabilities) {
+    constructor(filename, signal, yConfigs, probabilities, noiseArray=null, metaData=null){
         if (signal.length !== yConfigs[0].ubs.at(-1)){
             throw new Error("Length of signal and yConfig.ubs must be equal");
         }
         this.filename = filename;
         this.signal = signal;
-        this.yConfigs = yConfigs;
+        this.yConfigs = yConfigs.map(DataContainer.fixYConfig);;
         this.probabilities = probabilities;
 
         const labels = yConfigs.map(DataContainer.yConfigToArray);
-        this.unified = DataContainer.calculateUnified(signal, labels);
+        this.unified = DataContainer.calculateUnified(signal, labels, noiseArray);
         this.unifiedProbabilities = DataContainer.calculateUnifiedProbabilites(probabilities);
+        this.metaData = metaData || new Map();
+    }
+
+    getMetaData(key){
+        if (!this.metaData.has(key)){
+            this.metaData.set(key, this.calculateMetaData(key));
+        }
+        return this.metaData.get(key);
+    }
+
+    calculateMetaData(key){
+        if (key.startsWith('labels.')){
+            const index = parseInt(key.split(".")[1]);
+            return {min: -1, max: 1};
+        }
+        if (key.startsWith('probabilities.')){
+            return {min: -1, max: 1};
+        }
+        if (key === 'signal'){
+            return DataContainer.calculateMetaDataFromArray(this.signal);
+        }
+        for(const base of ['integral', 'noise']){
+            if (key === base){
+                return DataContainer.calculateMetaDataFromArray(this.unified, base);
+            }
+        };
+        throw new Error(`Unknown key: ${key}`);
+    }
+
+    static fixYConfig(yConfig){
+        for (let i = 0; i < yConfig.labels.length; i++){
+            yConfig.labels[i] = (yConfig.labels[i] === undefined  || yConfig.labels === null) ? -1 : yConfig.labels[i];
+        }
+        return yConfig;
+    }
+
+    static calculateMetaDataFromArray(array, accessor=undefined){
+        if (!accessor ){
+            return {min: d3.min(array), max: d3.max(array)};
+        }
+        return {min: d3.min(array, (d) => d[accessor]), max: d3.max(array, (d) => d[accessor])};
     }
 
     getContainer(key) {
@@ -35,31 +95,30 @@ class DataContainer {
          return this.unified;
     }
 
-    static calculateUnified(signal, labels) {
-       const mean = d3.mean(signal);
-       const integralIter = DataContainer.generateIntegral(signal, mean);
-       const noiseIter = DataContainer.generateNoise(signal, mean);
+    static calculateUnified(signal, labels, noiseArray=null) {
+        const mean = d3.mean(signal);
+        const integralIter = DataContainer.generateIntegral(signal, mean);
+        const noiseIter = noiseArray ? noiseArray.values() : DataContainer.generateNoise(signal, mean);
 
-       // Convert labels array to object with numbered keys
-       const labelObj = labels.reduce((acc, label, i) => ({
+        // Convert labels array to object with numbered keys
+        const labelObj = labels.reduce((acc, label, i) => ({
            ...acc,
            [labelKey(i)]: label
-       }), {});
+        }), {});
 
-       let data = new Array(signal.length);
-       for(let i = 0; i < signal.length; i++) {
-           data[i] = {
+        let data = new Array(signal.length);
+        for(let i = 0; i < signal.length; i++) {
+            data[i] = {
                time: i / 1395,
                signal: signal[i],
                integral: integralIter.next().value,
                noise: noiseIter.next().value,
-               ...Object.entries(labelObj).reduce((acc, [key, arr]) => ({
-                   ...acc,
-                   [key]: arr[i]
-               }), {})
-           };
-       }
-       return data;
+            };
+            for (let j = 0; j < labels.length; j++) {
+                data[i][labelKey(j)] = labels[j][i];
+            }
+        }
+        return data;
     }
 
     static calculateUnifiedProbabilites(probabilities) {
@@ -125,7 +184,7 @@ class DataContainer {
         for (let i = 0; i < yConfig.labels.length; i++) {
             let lb = i == 0 ? 0 : yConfig.ubs[i - 1];
             let ub = yConfig.ubs[i];
-            const value = yConfig.labels[i] === 0.5 ? null : yConfig.labels[i];
+            const value = yConfig.labels[i];
             result.fill(value, lb, ub);
         }
         return result;
@@ -233,4 +292,4 @@ class DataContainer {
     }
 }
 
-export { DataContainer };
+export { DataContainer, buildPreload};

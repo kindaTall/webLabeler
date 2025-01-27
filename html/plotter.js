@@ -10,7 +10,7 @@ export class Plotter {
         this.labelingIndex = 0;
 
         this.margin = { top: 20, right: 20, bottom: 30, left: 40 };
-        this.width = 800 - this.margin.left - this.margin.right;
+        this.width = 1200 - this.margin.left - this.margin.right;
         this.height = 200 - this.margin.top - this.margin.bottom;
         this.container = d3.select(`#${containerId}`);
         this.plots = [];
@@ -21,12 +21,12 @@ export class Plotter {
         this.viewDomain = this.baseViewDomain;
         this.verticalLines = [];
 
+        this.setupUI();
         this.createPlots();
         this.updateLines();
 
         this.setupClickHandlers();
 
-        this.setupUI();
     }
 
     destroy() {
@@ -36,8 +36,28 @@ export class Plotter {
 
     setupUI(){
         this.container.append("button")
+            .attr("class", "btn btn-outline-primary me-2")
             .text("Zoom Out")
             .on("click", () => this.resetZoom());
+
+        // add one radio button for each label, on click, change the labelingIndex
+        for (let i = 0; i < this.data.yConfigs.length; i++) {
+            const radioWrapper = this.container.append("div")
+                .attr("class", "form-check form-check-inline");
+
+            radioWrapper.append("input")
+                .attr("class", "form-check-input")
+                .attr("type", "radio")
+                .attr("name", "label")
+                .attr("value", i)
+                .attr("checked", i == 0 ? true : null)
+                .on("click", () => this.labelingIndex = i);
+
+            radioWrapper.append("label")
+                .attr("class", "form-check-label")
+                .text(`label ${i}`);
+        }
+        this.container.append("br");
     }
 
     setupClickHandlers() {
@@ -151,8 +171,9 @@ export class Plotter {
 
             const xMinCand = container[0].time;
             const xMaxCand = container.at(-1).time;
-            const yMinCand = d3.min(container, d => d[seriesConfig.yKey]);
-            const yMaxCand = d3.max(container, d => d[seriesConfig.yKey]);
+            const metaData = this.data.getMetaData(seriesConfig.yKey);
+            const yMinCand = metaData.min;
+            const yMaxCand = metaData.max;
 
             xMin = xMin > xMinCand ? xMinCand : xMin;
             xMax = xMax < xMaxCand ? xMaxCand : xMax;
@@ -215,6 +236,10 @@ export class Plotter {
         this.plots.forEach(plot => {
             plot.scales.x.domain([x0, x1]);
 
+            var domainMin = Infinity,
+                domainMax = -Infinity;
+            const autoScale = plot.plotConfig.autoScale && !plot.plotConfig.isManualScaled;
+
             plot.lines.forEach(line => {
                 let container = this.data.getContainer(line.yKey);
                 const c = container[0].time;
@@ -225,7 +250,17 @@ export class Plotter {
                 line.path
                     .datum(lttbData)
                     .attr("d", line.lineGen);
+
+                if (autoScale){
+                    domainMin = Math.min(domainMin, d3.min(lttbData, d => d[line.yKey]));
+                    domainMax = Math.max(domainMax, d3.max(lttbData, d => d[line.yKey]));
+                }
             });
+
+            if (autoScale){
+                plot.scales.y.domain([domainMin, domainMax]);
+                plot.g.select(".y-axis").call(d3.axisLeft(plot.scales.y));
+            }
 
             plot.g.select(".x-axis").call(d3.axisBottom(plot.scales.x));
         });

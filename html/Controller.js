@@ -13,7 +13,7 @@ export class Controller {
         this.audioPlayer = new AudioPlayer(this.getCurrentViewIndices.bind(this));
     }
 
-    handleFileChange(selectedFile) {
+    handleFileChange(selectedFile, preloadFiles) {
         this.fileLoader.loadFile(selectedFile)
             .then(data => {
                 if (this.plotter) {
@@ -22,6 +22,7 @@ export class Controller {
                 const config = this.getConfig();
                 this.plotter = new Plotter(data, "plot", config);
                 this.audioPlayer.setData(data);
+                this.fileLoader.preloadFiles(preloadFiles);
             });
     }
 

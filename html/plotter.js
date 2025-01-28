@@ -12,12 +12,12 @@ export class Plotter {
         this.margin = { top: 20, right: 20, bottom: 30, left: 40 };
         this.width = 1200 - this.margin.left - this.margin.right;
         this.height = 200 - this.margin.top - this.margin.bottom;
-        this.container = d3.select(`#${containerId}`);
+        this.container = d3.select(`#${containerId}`).append('div');
         this.plots = [];
         this.brush = d3.brushX()
             .extent([[0, 0], [this.width, this.height]])
             .on("end", (event) => this.brushed(event));
-        this.baseViewDomain = [0, this.data.unified.time.at(-1)];
+        this.baseViewDomain = [0, this.data.dataLong.time.at(-1)];
         this.viewDomain = this.baseViewDomain;
         this.verticalLines = [];
 
@@ -30,9 +30,7 @@ export class Plotter {
     }
 
     destroy() {
-        this.container.selectAll("svg").remove();
-        this.container.selectAll("button").remove();
-        this.container.selectAll("div").remove();
+        this.container.remove();
     }
 
     setupUI(){
@@ -251,25 +249,12 @@ export class Plotter {
         plot.lines.forEach(line => {
             const container = this.data.getContainer(line.yKey);
             const [start, stop] = this.calculateIndexRange(container, x0, x1);
-//            line.lttbData = largestTriangleThreeBuckets(
-//                container.slice(start, stop),
-//                this.width,
-//                'time',
-//                line.yKey
-//            );
             line.lttbData = largestTriangleThreeBucketsRF(
                 {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
                 this.width,
                 'time',
                 line.yKey
             );
-//            const yData = new Int32Array(this.data.unified.slice(start, stop).map(d => d['signal']));
-//            const xData = new Int32Array(stop-start);
-//            for(let i = 0; i < stop-start; i++) xData[i] = i;
-//            const lttb = largestTriangleThreeBucketsRF({time: xData, signal: yData}, this.width, 'time', 'signal');
-//
-//            console.log(lttb);
-
         });
     }
     
@@ -296,9 +281,6 @@ export class Plotter {
     }
 
     calculateYScaleSingle(array, key, scalingConfig){
-//        const [q05, q95] = [d3.quantile(array, scalingConfig.quantileRange.lower, d=>d[key]),
-//                            d3.quantile(array, scalingConfig.quantileRange.upper, d=>d[key])];
-//        const [min, max] = [d3.min(array, d=>d[key]), d3.max(array, d=>d[key])];
         const [q05, q95] = [d3.quantile(array[key], scalingConfig.quantileRange.lower),
                             d3.quantile(array[key], scalingConfig.quantileRange.upper)];
         const [min, max] = [d3.min(array[key]), d3.max(array[key])];

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Filter Performance Benchmark</title>
+    <script src="./external/fili/dist/fili.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.7.0/chart.min.js"></script>
+    <style>
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .results {
+            margin-top: 20px;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .chart-container {
+            margin-top: 20px;
+            height: 400px;
+        }
+        button {
+            padding: 10px;
+            margin: 5px;
+            cursor: pointer;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f4f4f4;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Filter Performance Benchmark</h1>
+        <div>
+            <button onclick="runBenchmark()">Run Benchmark</button>
+            <button onclick="toggleChartType()">Toggle Chart Type</button>
+        </div>
+        <div class="chart-container">
+            <canvas id="performanceChart"></canvas>
+        </div>
+        <div class="results" id="resultsTable"></div>
+    </div>
+
+    <script>
+        let chart;
+        let showExecutionTime = true;
+
+        function generateTestSignal(length) {
+            const signal = new Float32Array(length);
+            for (let i = 0; i < length; i++) {
+                // Generate a complex signal with multiple frequencies
+                signal[i] = Math.sin(2 * Math.PI * i / 50) + // 50Hz component
+                           0.5 * Math.sin(2 * Math.PI * i / 10) + // 10Hz component
+                           0.25 * Math.sin(2 * Math.PI * i / 5); // 5Hz component
+                signal[i] *= 1000;
+            }
+            return signal;
+        }
+
+        function measurePerformance(filterFunc, signal) {
+            const start = performance.now();
+            const filtered = filterFunc(signal);
+            const end = performance.now();
+
+            // Calculate mean squared error from original signal
+            let mse = 0;
+            for (let i = 0; i < signal.length; i++) {
+                mse += (filtered[i] - signal[i]) ** 2;
+            }
+            mse /= signal.length;
+
+            return {
+                executionTime: end - start,
+                mse: mse,
+                filtered: filtered
+            };
+        }
+
+        function createFIRFilter(order) {
+            const firCalculator = new Fili.FirCoeffs();
+            const firFilterCoeffs = firCalculator.lowpass({
+                order: order,
+                Fs: 1000,
+                Fc: 50
+            });
+            const filter = new Fili.FirFilter(firFilterCoeffs);
+            return filter;
+        }
+
+        function createIIRFilter(order) {
+            const iirCalculator = new Fili.CalcCascades();
+            const iirFilterCoeffs = iirCalculator.lowpass({
+                order: order,
+                characteristic: 'butterworth',
+                Fs: 1000,
+                Fc: 50,
+                preGain: false
+            });
+            const filter = new Fili.IirFilter(iirFilterCoeffs);
+            return filter;
+        }
+
+        function runBenchmark() {
+            const signalLength = 5000000;
+            const signal = generateTestSignal(signalLength);
+            const results = [];
+
+            // Test different FIR filter orders
+            [21, 51, 101].forEach(order => {
+                const firFilter = createFIRFilter(order);
+
+                // Test regular filtering
+                const firResult = measurePerformance(
+                    sig => firFilter.multiStep(sig),
+                    signal
+                );
+                results.push({
+                    type: 'FIR',
+                    order: order,
+                    mode: 'Regular',
+                    ...firResult
+                });
+
+                // Test filtfilt (forward-backward filtering)
+                const firFiltfiltResult = measurePerformance(
+                    sig => {
+                        const forward = firFilter.multiStep(sig);
+                        return firFilter.multiStep(forward.reverse()).reverse();
+                    },
+                    signal
+                );
+                results.push({
+                    type: 'FIR',
+                    order: order,
+                    mode: 'Filtfilt',
+                    ...firFiltfiltResult
+                });
+            });
+
+            // Test different IIR filter orders
+            [2, 4, 6].forEach(order => {
+                const iirFilter = createIIRFilter(order);
+
+                // Test regular filtering
+                const iirResult = measurePerformance(
+                    sig => iirFilter.multiStep(sig),
+                    signal
+                );
+                results.push({
+                    type: 'IIR',
+                    order: order,
+                    mode: 'Regular',
+                    ...iirResult
+                });
+
+                // Test filtfilt (forward-backward filtering)
+                const iirFiltfiltResult = measurePerformance(
+                    sig => {
+                        const forward = iirFilter.multiStep(sig);
+                        return iirFilter.multiStep(forward.reverse()).reverse();
+                    },
+                    signal
+                );
+                results.push({
+                    type: 'IIR',
+                    order: order,
+                    mode: 'Filtfilt',
+                    ...iirFiltfiltResult
+                });
+            });
+
+            updateChart(results);
+            updateTable(results);
+        }
+
+        function updateChart(results) {
+            const ctx = document.getElementById('performanceChart').getContext('2d');
+
+            const labels = results.map(r =>
+                `${r.type} (Order ${r.order}) ${r.mode}`
+            );
+
+            const data = {
+                labels: labels,
+                datasets: [{
+                    label: showExecutionTime ? 'Execution Time (ms)' : 'Mean Squared Error',
+                    data: results.map(r => showExecutionTime ? r.executionTime : r.mse),
+                    backgroundColor: results.map(r =>
+                        r.type === 'FIR' ? 'rgba(54, 162, 235, 0.5)' : 'rgba(255, 99, 132, 0.5)'
+                    )
+                }]
+            };
+
+            if (chart) {
+                chart.destroy();
+            }
+
+            chart = new Chart(ctx, {
+                type: 'bar',
+                data: data,
+                options: {
+                    responsive: true,
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function updateTable(results) {
+            const table = document.createElement('table');
+            table.innerHTML = `
+                <tr>
+                    <th>Filter Type</th>
+                    <th>Order</th>
+                    <th>Mode</th>
+                    <th>Execution Time (ms)</th>
+                    <th>Mean Squared Error</th>
+                </tr>
+                ${results.map(r => `
+                    <tr>
+                        <td>${r.type}</td>
+                        <td>${r.order}</td>
+                        <td>${r.mode}</td>
+                        <td>${r.executionTime.toFixed(2)}</td>
+                        <td>${r.mse.toExponential(2)}</td>
+                    </tr>
+                `).join('')}
+            `;
+
+            const resultsDiv = document.getElementById('resultsTable');
+            resultsDiv.innerHTML = '';
+            resultsDiv.appendChild(table);
+        }
+
+        function toggleChartType() {
+            showExecutionTime = !showExecutionTime;
+            const lastResults = document.getElementById('resultsTable').querySelector('table');
+            if (lastResults) {
+                const results = Array.from(lastResults.querySelectorAll('tr'))
+                    .slice(1) // Skip header row
+                    .map(row => {
+                        const cells = row.querySelectorAll('td');
+                        return {
+                            type: cells[0].textContent,
+                            order: parseInt(cells[1].textContent),
+                            mode: cells[2].textContent,
+                            executionTime: parseFloat(cells[3].textContent),
+                            mse: parseFloat(cells[4].textContent)
+                        };
+                    });
+                updateChart(results);
+            }
+        }
+    </script>
+</body>
+</html>

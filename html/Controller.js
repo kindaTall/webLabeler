@@ -13,17 +13,27 @@ export class Controller {
         this.audioPlayer = new AudioPlayer(this.getCurrentViewIndices.bind(this));
     }
 
-    handleFileChange(selectedFile, preloadFiles) {
-        this.fileLoader.loadFile(selectedFile)
-            .then(data => {
-                if (this.plotter) {
-                    this.plotter.destroy();
-                }
-                const config = this.getConfig();
-                this.plotter = new Plotter(data, "plot", config);
-                // this.audioPlayer.setData(data);
-                // this.fileLoader.preloadFiles(preloadFiles);
-            });
+    async handleFileChange(selectedFile, preloadFiles) {
+        try {
+            // Load and plot first - critical path
+            const data = await this.fileLoader.loadFile(selectedFile);
+            if (this.plotter) {
+                this.plotter.destroy();
+            }
+            const config = this.getConfig();
+            this.plotter = new Plotter(data, "plot", config);
+
+            // Force browser to render by creating a new macrotask
+            await new Promise(resolve => setTimeout(resolve, 0));
+
+            // Heavy calculations in background
+            Promise.all([
+                this.audioPlayer.setData(data),
+            ]).catch(err => console.error('Background tasks error:', err));
+
+        } catch (err) {
+            console.error('Error in file handling:', err);
+        }
     }
 
     getCurrentViewIndices(){

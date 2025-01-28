@@ -8,8 +8,8 @@ from waitress import serve
 import logging
 
 logging.basicConfig(
-   level=logging.INFO,
-   format='%(asctime)s - %(levelname)s - %(message)s'
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
@@ -81,16 +81,18 @@ def serve_static(path):
 
 @app.after_request
 def log_request(response):
-   logger.info(f'{request.method} {request.path} - Status: {response.status_code}')
-   if response.status_code >= 400:
-       logger.error(f'{request.method} {request.path} - Error response: {response.get_data(as_text=True)}')
-   return response
+    logger.info(f'{request.method} {request.path} - Status: {response.status_code}')
+    if response.status_code >= 400:
+        logger.error(f'{request.method} {request.path} - Error response: {response.get_data(as_text=True)}')
+    return response
+
 
 def run_weblabeler(db: DBInterface):
     app.db = db
     port = 8080
     print(f"Running weblabeler on port {port}")
     serve(app, host='0.0.0.0', port=port)
+
 
 if __name__ == '__main__':
     run_weblabeler(MockDB())

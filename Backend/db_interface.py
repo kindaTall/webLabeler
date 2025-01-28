@@ -26,7 +26,6 @@ class DBInterface(abc.ABC):
         pass
 
 
-
 class MockDB(DBInterface):
     def __init__(self):
         self.base = Path('C:\DatenSenvis\RelabelingTasks\Herbstrose-exits-only')

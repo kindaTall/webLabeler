@@ -1,4 +1,3 @@
-
 const DEFAULT_CONFIG = {
     plots: {
         "Label": {
@@ -24,7 +23,12 @@ const DEFAULT_CONFIG = {
                     style: { strokeWidth: 1.5, color: "blue" }
                 }
             },
-            "autoScale": false
+            "scaling": {
+                "autoScale": false,
+                "quantileRange": { "lower": 0.025, "upper": 0.975 },
+                "expansionFactor": 0.25,
+                "fixedYRange": null
+            }
         },
         "Signal": {
             "series": {
@@ -33,7 +37,12 @@ const DEFAULT_CONFIG = {
                     yKey: "signal"
                 }
             },
-            "autoScale": true
+            "scaling": {
+                "autoScale": true,
+                "quantileRange": { "lower": 0.025, "upper": 0.975 },
+                "expansionFactor": 0.25,
+                "fixedYRange": null
+            }
         },
         "Integral": {
             "series": {
@@ -42,7 +51,12 @@ const DEFAULT_CONFIG = {
                     yKey: "integral"
                 }
             },
-            "autoScale": true
+            "scaling": {
+                "autoScale": true,
+                "quantileRange": { "lower": 0.025, "upper": 0.975 },
+                "expansionFactor": 0.5,
+                "fixedYRange": null
+            }
         },
         "Noise": {
             "series": {
@@ -51,7 +65,12 @@ const DEFAULT_CONFIG = {
                     yKey: "noise"
                 }
             },
-            "autoScale": true
+            "scaling": {
+                "autoScale": true,
+                "quantileRange": { "lower": 0.0, "upper": 0.7 },
+                "expansionFactor": 3,
+                "fixedYRange": null
+            }
         }
     }
 };
@@ -82,25 +101,28 @@ class SeriesConfig {
 }
 
 class ScalingConfig {
-    constructor(autoScale){
-        this.autoScale = autoScale;
-        this.quantileRange = {lower: 0.025, upper: 0.975};
-        this.expansionFactor = 0.25;
-        this.fixedYRange = null;
+    constructor(config = {}) {
+        this.autoScale = config.autoScale ?? false;
+        this.quantileRange = {
+            lower: config.quantileRange?.lower ?? 0.025,
+            upper: config.quantileRange?.upper ?? 0.975
+        };
+        this.expansionFactor = config.expansionFactor ?? 0.25;
+        this.fixedYRange = config.fixedYRange ?? null;
     }
 }
-
 
 class PlotConfig {
     constructor({
         series = {},
-        defaultStyle = {}
+        defaultStyle = {},
+        scaling = {}
     } = {}) {
         this.series = {};
         this.defaultStyle = new SeriesStyle(defaultStyle);
-        this.scalingConfig = new ScalingConfig(series?.autoScale || false);
+        this.scalingConfig = new ScalingConfig(scaling);
 
-        for (const [seriesName, config] of Object.entries(series.series)) {
+        for (const [seriesName, config] of Object.entries(series)) {
             this.addSeries(seriesName, config);
         }
     }
@@ -122,8 +144,8 @@ class PlotterConfig {
         this.plots = {};
         this.defaultStyle = new SeriesStyle(defaultStyle);
 
-        for (const [plotName, series] of Object.entries(plots)) {
-            this.addPlot(plotName, series);
+        for (const [plotName, config] of Object.entries(plots)) {
+            this.addPlot(plotName, config);
         }
     }
 
@@ -131,8 +153,12 @@ class PlotterConfig {
         return new PlotterConfig(DEFAULT_CONFIG);
     }
 
-    addPlot(plotName, series) {
-        this.plots[plotName] = new PlotConfig({series, defaultStyle: this.defaultStyle});
+    addPlot(plotName, config) {
+        this.plots[plotName] = new PlotConfig({
+            series: config.series,
+            defaultStyle: this.defaultStyle,
+            scaling: config.scaling
+        });
     }
 
     getPlotConfig(plotName) {
@@ -140,4 +166,4 @@ class PlotterConfig {
     }
 }
 
-export { PlotterConfig, PlotConfig, SeriesConfig, SeriesStyle };
+export { PlotterConfig, PlotConfig, SeriesConfig, SeriesStyle, ScalingConfig };

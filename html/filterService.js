@@ -24,6 +24,17 @@ class FilterService {
             gain: 0,
             preGain: false
         });
+
+        this.addFilter('audio', {
+            type: 'lowpass',
+            order: 8,
+            characteristic: 'butterworth',
+            Fs: 1395,
+            Fc: 30,
+            BW: 1,
+            gain: 0,
+            preGain: false
+        });
     }
 
     addFilter(name, config) {

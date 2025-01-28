@@ -1,3 +1,8 @@
+import {filterService} from "./filterService.js";
+
+
+const maxINT16 = 32767;
+
 export class AudioPlayer {
     constructor(getCurrentViewIndices) {
         // Callback to get current view range from controller
@@ -78,28 +83,27 @@ export class AudioPlayer {
     }
 
     async calculateClipRange() {
-        const signal = this.data.signal;
+        const signal = filterService.filterSignal(this.data.signal, 'audio');
 
         // Calculate signal statistics for normalization
-        const mean = d3.mean(signal);
-        const quants = [
-            d3.quantile(signal, 0.15),  // Lower quantile
-            d3.quantile(signal, 0.85)   // Upper quantile
-        ];
-
-        // Calculate amplitudes relative to mean
-        const amplitudes = quants.map(q => Math.abs(q - mean));
-
-        // Scale to INT16 range for audio playback
-        const maxINT16 = 32767;
-        const scale = maxINT16 / Math.min(amplitudes[0], amplitudes[1]);
+        const scale = this.getScaleFactor(signal);
 
         // Convert signal to INT16 audio samples
+        return this.buildClippedSignal(signal, scale);
+    }
+
+    getScaleFactor(signal){
+        return maxINT16 /d3.quantile(signal, 0.85);
+    }
+
+
+    buildClippedSignal(signal, scale){
         const clippedAudio = new Int16Array(signal.length);
         for (let i = 0; i < signal.length; i++) {
-            clippedAudio[i] = Math.round((signal[i] - mean) * scale);
+            const value = Math.round(signal[i] * scale);
+            const clipped = value > maxINT16 ? maxINT16 : value < -maxINT16 ? -maxINT16 : value;
+            clippedAudio[i] = clipped;
         }
-        return clippedAudio;
     }
 
     async getAudio() {

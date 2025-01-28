@@ -1,36 +1,37 @@
-import {filterService} from "./filterService.js";
-
-
-const maxINT16 = 32767;
-
 export class AudioPlayer {
     constructor(getCurrentViewIndices) {
         // Callback to get current view range from controller
         this.getCurrentViewIndices = getCurrentViewIndices;
-
         // Audio state
         this.playing = false;
         this.audioContext = null;
         this.source = null;
-
         // Audio configuration
         this.sampleRate = 1395;  // Raw signal sample rate
         this.playbackSpeed = 256;  // Speed multiplier for audible playback
-
         // UI setup
         this.container = d3.select("#audioPlayer");
         this.setupUI();
-
         // Data storage
         this.data = null;  // Raw input data
         this.clippedAudio = null;  // Pre-processed Int16 audio data
+        // Setup worker
+        this.worker = new Worker(new URL('./audioWorker.js', import.meta.url), { type: 'module' });
+        this.setupWorker();
+    }
+
+    setupWorker() {
+        this.worker.onmessage = (e) => {
+            this.clippedAudio = e.data;
+            this.playButton.attr("disabled", null);  // Enable button when processing is done
+        };
     }
 
     setupUI() {
         this.playButton = this.container.append("button")
             .attr("class", "btn btn-outline-primary me-2")
             .text("Play")
-            .style("display", "none")
+            .attr("disabled", "disabled")  // Start disabled until audio is processed
             .on("click", () => this.toggle());
     }
 
@@ -45,10 +46,10 @@ export class AudioPlayer {
     }
 
     async play() {
-        if (!this.data) return;
+        if (!this.data || !this.clippedAudio) return;
 
         // Get audio data for current view
-        const clippedAudio = await this.getAudio();
+        const audioData = await this.getAudio();
 
         // Lazy initialize audio context (browser requirement)
         this.audioContext ||= new AudioContext();
@@ -56,12 +57,12 @@ export class AudioPlayer {
         // Create and configure audio buffer
         const buffer = this.audioContext.createBuffer(
             1,  // mono channel
-            clippedAudio.length,
+            audioData.length,
             this.sampleRate * this.playbackSpeed
         );
 
         // Fill buffer with processed audio data
-        buffer.getChannelData(0).set(clippedAudio);
+        buffer.getChannelData(0).set(audioData);
 
         // Create and start audio source
         const source = this.audioContext.createBufferSource();
@@ -78,37 +79,13 @@ export class AudioPlayer {
 
     async setData(data) {
         this.data = data;
-        this.playButton.style("display", null);
-        this.clippedAudio = this.calculateClipRange();
-    }
-
-    async calculateClipRange() {
-        const signal = filterService.filterSignal(this.data.signal, 'audio');
-
-        // Calculate signal statistics for normalization
-        const scale = this.getScaleFactor(signal);
-
-        // Convert signal to INT16 audio samples
-        return this.buildClippedSignal(signal, scale);
-    }
-
-    getScaleFactor(signal){
-        return maxINT16 /d3.quantile(signal, 0.85);
-    }
-
-
-    buildClippedSignal(signal, scale){
-        const clippedAudio = new Int16Array(signal.length);
-        for (let i = 0; i < signal.length; i++) {
-            const value = Math.round(signal[i] * scale);
-            const clipped = value > maxINT16 ? maxINT16 : value < -maxINT16 ? -maxINT16 : value;
-            clippedAudio[i] = clipped;
-        }
+        // Start processing in worker
+        this.playButton.attr("disabled", "disabled");  // Disable while processing
+        this.worker.postMessage(this.data.signal);
     }
 
     async getAudio() {
         const indices = this.getCurrentViewIndices();
-        const clippedAudio = await this.clippedAudio;
-        return clippedAudio.slice(indices[0], indices[1]);
+        return this.clippedAudio.slice(indices[0], indices[1]);
     }
 }

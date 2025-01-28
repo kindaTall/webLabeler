@@ -3,3 +3,26 @@
     shape-rendering: crispEdges;
 }
 
+/* Add to styles.css */
+#plot {
+    position: relative;
+    width: 100%;
+    height: calc(100vh - 60px);
+    overflow: hidden;
+}
+
+/* Make sure the body takes full width */
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    overflow-x: hidden;
+}
+
+/* Container styling */
+.plot-container {
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    overflow-x: hidden;
+}

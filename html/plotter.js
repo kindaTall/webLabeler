@@ -9,10 +9,18 @@ export class Plotter {
         this.config = config;
         this.labelingIndex = 0;
 
+        // Calculate dimensions
         this.margin = { top: 20, right: 20, bottom: 30, left: 40 };
-        this.width = 1200 - this.margin.left - this.margin.right;
-        this.height = 200 - this.margin.top - this.margin.bottom;
-        this.container = d3.select(`#${containerId}`).append('div');
+
+        // Create container first to get proper dimensions
+        this.container = d3.select(`#${containerId}`).append('div')
+            .style("width", "100%")
+            .style("height", "95vh")
+            .style("overflow-y", "auto");
+
+        // Calculate dimensions after container is created
+        this.calculateDimensions();
+
         this.plots = [];
         this.brush = d3.brushX()
             .extent([[0, 0], [this.width, this.height]])
@@ -24,24 +32,71 @@ export class Plotter {
         this.setupUI();
         this.createPlots();
         this.updateLines();
-
         this.setupClickHandlers();
-
     }
 
-    destroy() {
-        this.container.remove();
+    calculateDimensions() {
+        // Get number of plots from config
+        const numPlots = Object.keys(this.config.plots).length;
+
+        // Calculate height based on viewport
+        const totalHeight = window.innerHeight - 100; // 100px for UI elements
+        this.height = (totalHeight / numPlots) - this.margin.top - this.margin.bottom;
+
+        // Get actual container width in pixels
+        const containerWidth = this.container.node().getBoundingClientRect().width;
+        this.width = containerWidth - this.margin.left - this.margin.right;
     }
 
-    setupUI(){
-        this.container.append("button")
+    createPlot(name, plotConfig) {
+        const svg = this.container.append("svg")
+            .attr("width", this.width + this.margin.left + this.margin.right)
+            .attr("height", this.height + this.margin.top + this.margin.bottom)
+            .style("margin-top", "10px");
+
+        const g = svg.append("g")
+            .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
+
+        // Add title
+        svg.append("text")
+            .attr("x", this.width / 2 + this.margin.left)
+            .attr("y", this.margin.top / 2)
+            .attr("text-anchor", "middle")
+            .text(name);
+
+        const plotData = plotConfig.scalingConfig.autoScale ?
+            { xDomain: this.baseViewDomain, yDomain: [0, 1]} :
+            this.getPlotData(plotConfig);
+
+        const scales = this.createScales(plotData);
+
+        this.createAxes(g, scales);
+        const lines = this.createLines(g, plotData, scales, plotConfig);
+
+        g.append("g")
+            .attr("class", "brush")
+            .call(this.brush);
+
+        return { svg, g, scales, lines, plotConfig };
+    }
+
+    setupUI() {
+        // Add controls in a fixed header
+        const header = this.container.insert("div", ":first-child")
+            .style("position", "sticky")
+            .style("top", "0")
+            .style("background-color", "white")
+            .style("padding", "10px")
+            .style("z-index", "1000");
+
+        header.append("button")
             .attr("class", "btn btn-outline-primary me-2")
             .text("Zoom Out")
             .on("click", () => this.resetZoom());
 
         // add one radio button for each label, on click, change the labelingIndex
         for (let i = 0; i < this.data.yConfigs.length; i++) {
-            const radioWrapper = this.container.append("div")
+            const radioWrapper = header.append("div")
                 .attr("class", "form-check form-check-inline");
 
             radioWrapper.append("input")
@@ -56,7 +111,10 @@ export class Plotter {
                 .attr("class", "form-check-label")
                 .text(`label ${i}`);
         }
-        this.container.append("br");
+    }
+
+    destroy() {
+        this.container.remove();
     }
 
     setupClickHandlers() {
@@ -127,38 +185,6 @@ export class Plotter {
         for (const [name, plotConfig] of Object.entries(this.config.plots)) {
             this.plots.push(this.createPlot(name, plotConfig));
         }
-    }
-
-    createPlot(name, plotConfig) {
-        const svg = this.container.append("svg")
-            .attr("width", this.width + this.margin.left + this.margin.right)
-            .attr("height", this.height + this.margin.top + this.margin.bottom)
-            .style("margin-top", "10px");
-
-        const g = svg.append("g")
-            .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
-
-        // Add title
-        svg.append("text")
-            .attr("x", this.width / 2 + this.margin.left)
-            .attr("y", this.margin.top / 2)
-            .attr("text-anchor", "middle")
-            .text(name);
-
-        const plotData = plotConfig.scalingConfig.autoScale ?
-                    { xDomain: this.baseViewDomain, yDomain: [0, 1]} :
-                    this.getPlotData(plotConfig);
-                    
-        const scales = this.createScales(plotData);
-
-        this.createAxes(g, scales);
-        const lines = this.createLines(g, plotData, scales, plotConfig);
-
-        g.append("g")
-            .attr("class", "brush")
-            .call(this.brush);
-
-        return { svg, g, scales, lines, plotConfig };
     }
 
     getPlotData(plotConfig) {

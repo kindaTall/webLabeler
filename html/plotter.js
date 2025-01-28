@@ -25,6 +25,13 @@ export class Plotter {
         this.brush = d3.brushX()
             .extent([[0, 0], [this.width, this.height]])
             .on("end", (event) => this.brushed(event));
+
+        this.overviewBrush = d3.brushX()
+            .extent([[0, 0], [this.width, this.overviewHeight]])
+            .on("brush end", (event) => this.overviewBrushed(event));
+        this.isUpdatingOverview = false;
+
+
         this.baseViewDomain = [0, this.data.dataLong.time.at(-1)];
         this.viewDomain = this.baseViewDomain;
         this.verticalLines = [];
@@ -32,52 +39,12 @@ export class Plotter {
         this.setupUI();
         this.createPlots();
         this.updateLines();
+        this.updatePlot(this.overview);
         this.setupClickHandlers();
     }
 
-    calculateDimensions() {
-        // Get number of plots from config
-        const numPlots = Object.keys(this.config.plots).length;
-
-        // Calculate height based on viewport
-        const totalHeight = window.innerHeight - 100; // 100px for UI elements
-        this.height = (totalHeight / numPlots) - this.margin.top - this.margin.bottom;
-
-        // Get actual container width in pixels
-        const containerWidth = this.container.node().getBoundingClientRect().width;
-        this.width = containerWidth - this.margin.left - this.margin.right;
-    }
-
-    createPlot(name, plotConfig) {
-        const svg = this.container.append("svg")
-            .attr("width", this.width + this.margin.left + this.margin.right)
-            .attr("height", this.height + this.margin.top + this.margin.bottom)
-            .style("margin-top", "10px");
-
-        const g = svg.append("g")
-            .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
-
-        // Add title
-        svg.append("text")
-            .attr("x", this.width / 2 + this.margin.left)
-            .attr("y", this.margin.top / 2)
-            .attr("text-anchor", "middle")
-            .text(name);
-
-        const plotData = plotConfig.scalingConfig.autoScale ?
-            { xDomain: this.baseViewDomain, yDomain: [0, 1]} :
-            this.getPlotData(plotConfig);
-
-        const scales = this.createScales(plotData);
-
-        this.createAxes(g, scales);
-        const lines = this.createLines(g, plotData, scales, plotConfig);
-
-        g.append("g")
-            .attr("class", "brush")
-            .call(this.brush);
-
-        return { svg, g, scales, lines, plotConfig };
+    destroy() {
+        this.container.remove();
     }
 
     setupUI() {
@@ -113,8 +80,93 @@ export class Plotter {
         }
     }
 
-    destroy() {
-        this.container.remove();
+    calculateDimensions() {
+        // Get number of plots from config
+        const numPlots = Object.keys(this.config.plots).length;
+        const overviewHeightRatio = 0.25;
+
+        // Calculate height based on viewport
+        const totalHeight = window.innerHeight - 100; // 100px for UI elements
+        this.height = (totalHeight / (numPlots + overviewHeightRatio) ) - this.margin.top - this.margin.bottom;
+        this.overviewHeight = this.height * overviewHeightRatio;
+
+        // Get actual container width in pixels
+        const containerWidth = Math.floor(this.container.node().getBoundingClientRect().width);
+        this.width = containerWidth - this.margin.left - this.margin.right;
+        this.plotShape = {width:this.width, height:this.height};
+        this.overviewShape = {width:this.width, height:this.overviewHeight};
+    }
+
+    createPlots() {
+        this.overview = this.createOverviewPlot();
+        for (const [name, plotConfig] of Object.entries(this.config.plots)) {
+            this.plots.push(this.createPlot(name, plotConfig));
+        }
+    }
+
+    createPlotArgs({plotConfig, shape, name=null, axis=true, }){
+        const svg = this.container.append("svg")
+            .attr("width", shape.width + this.margin.left + this.margin.right)
+            .attr("height", shape.height + this.margin.top + this.margin.bottom)
+            .style("margin-top", "10px");
+
+        const g = svg.append("g")
+            .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
+
+        if (name){
+             svg.append("text")
+                .attr("x", shape.width / 2 + this.margin.left)
+                .attr("y", this.margin.top / 2)
+                .attr("text-anchor", "middle")
+                .text(name);
+        }
+
+        const plotData = this.getPlotData(plotConfig);
+        const scales = this.createScales({xDomain: this.baseViewDomain, yDomain:plotData.yDomain}, shape);
+
+        if (axis){
+           // Create axes
+            this.createAxes(g, scales, shape.height);
+        }
+
+        const lines = this.createLines(g, plotData, scales, plotConfig);
+
+        return {svg, g, scales, lines};
+    }
+
+    createOverviewPlot() {
+        const plotConfig = this.config.plots.Signal;
+        const {svg, g, scales, lines} = this.createPlotArgs({plotConfig, shape:this.overviewShape, axis:false});
+
+
+        // Add brush
+        const brush = g.append("g")
+            .attr("class", "overview-brush")
+            .call(this.overviewBrush)
+            .call(this.overviewBrush.move, [
+                scales.x(this.viewDomain[0]),
+                scales.x(this.viewDomain[1])
+            ]);
+
+        const adjustBrush = () => {
+            brush.call(this.overviewBrush.move, [
+                scales.x(this.viewDomain[0]),
+                scales.x(this.viewDomain[1])
+            ]);
+        };
+
+        return new OverviewPlot({ svg, g, scales, lines, plotConfig, adjustBrush });
+    }
+    
+    createPlot(name, plotConfig) {
+        const {svg, g, scales, lines} = this.createPlotArgs({plotConfig, shape:this.plotShape, name});
+
+
+        g.append("g")
+            .attr("class", "brush")
+            .call(this.brush);
+
+        return new BasePlot({ svg, g, scales, lines, plotConfig });
     }
 
     setupClickHandlers() {
@@ -149,7 +201,14 @@ export class Plotter {
                     let indices = this.verticalLines.map(x=>Math.round(x*1395));
                     this.data.updateLabels(this.labelingIndex, indices[0], indices[1], label);
                     this.verticalLines = [];
-                    this.updateLines();
+
+                    // delete cached lttb data on labeling plot
+                    this.plots[0].lines.forEach(line => {
+                        line.lttbData = null;
+                    });
+
+                    this.updateVerticalLines();
+                    this.updatePlot(this.plots[0]);
                 }
             });
         });
@@ -181,12 +240,6 @@ export class Plotter {
         });
     }
 
-    createPlots() {
-        for (const [name, plotConfig] of Object.entries(this.config.plots)) {
-            this.plots.push(this.createPlot(name, plotConfig));
-        }
-    }
-
     getPlotData(plotConfig) {
         let xMin = Infinity;
         let xMax = -Infinity;
@@ -214,32 +267,32 @@ export class Plotter {
         };
     }
 
-    createScales(plotData) {
+    createScales({xDomain, yDomain}, {width, height}) {
         return {
             x: d3.scaleLinear()
-                .domain(plotData.xDomain)
-                .range([0, this.width]),
+                .domain(xDomain)
+                .range([0, width]),
             y: d3.scaleLinear()
-                .domain(plotData.yDomain)
-                .range([this.height, 0])
+                .domain(yDomain)
+                .range([height, 0])
         };
     }
 
-    createAxes(g, scales) {
+    createAxes(g, scales, height) {
         g.append("g")
             .attr("class", "x-axis")
-            .attr("transform", `translate(0,${this.height})`)
+            .attr("transform", `translate(0,${height})`)
             .call(d3.axisBottom(scales.x));
 
         g.append("g")
             .attr("class", "y-axis")
-            .call(d3.axisLeft(scales.y));
+            .call(d3.axisLeft(scales.y).ticks(3));
     }
 
     createLines(g, plotData, scales, plotConfig) {
         const colors = d3.schemeCategory10;
         return Object.entries(plotConfig.series).map(([seriesName, seriesConfig], i) => {
-            const [xKey, yKey] = [seriesConfig.xKey, seriesConfig.yKey];
+            const yKey = seriesConfig.yKey;
             const style = seriesConfig.style;
             const defaultStyle = this.config.defaultStyle;
 
@@ -255,32 +308,38 @@ export class Plotter {
                 .attr("stroke-width", style.strokeWidth || defaultStyle.strokeWidth || 1.5)
                 .attr("opacity", style.opacity || defaultStyle.opacity || 1);
 
-            return { path, lineGen, xKey, yKey };
+            return new Line({ path, lineGen, yKey });  // Todo: Create line class for better containing
         });
     }
 
     updateLines() {
-        const [x0, x1] = this.viewDomain;
-        this.plots.forEach(plot => {
-            plot.scales.x.domain([x0, x1]);
-            this.gatherLTTBData(plot, x0, x1);
-            this.updateYScale(plot);
-            this.updatePaths(plot);
-            this.updateAxes(plot);
-        });
+        this.plots.forEach(plot => this.updatePlot(plot));
         this.updateVerticalLines();
+        this.overview.adjustBrush();
+    }
+
+    updatePlot(plot){
+        this.gatherLTTBData(plot);
+        this.updatePlotScaleDomain(plot);
+        this.updatePaths(plot);
+        this.updateAxes(plot);
     }
     
-    gatherLTTBData(plot, x0, x1) {
+    gatherLTTBData(plot) {
+        const [x0, x1] = this.viewDomain;
         plot.lines.forEach(line => {
             const container = this.data.getContainer(line.yKey);
             const [start, stop] = this.calculateIndexRange(container, x0, x1);
-            line.lttbData = largestTriangleThreeBucketsRF(
-                {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
-                this.width,
-                'time',
-                line.yKey
-            );
+            if (line?.lttbData?.bounds.start == start && line?.lttbData?.bounds.stop == stop) return;
+            line.lttbData = {
+                bounds : {start, stop},
+                data : largestTriangleThreeBucketsRF(
+                    {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
+                    this.width,
+                    'time',
+                    line.yKey
+                )
+            };
         });
     }
     
@@ -292,15 +351,17 @@ export class Plotter {
         );
     }
     
-    updateYScale(plot) {
+    updatePlotScaleDomain(plot) {
+        plot.scales.x.domain(this.viewDomain);
+
         if (!plot.plotConfig.scalingConfig.autoScale) return;
 
-        const domains = plot.lines.map(line =>
-            this.calculateYScaleSingle(line.lttbData, line.yKey, plot.plotConfig.scalingConfig)
+        const yDomains = plot.lines.map(line =>
+            this.calculateYScaleSingle(line.lttbData.data, line.yKey, plot.plotConfig.scalingConfig)
         );
         const [min, max] = [
-            Math.min(...domains.map(d => d[0])),
-            Math.max(...domains.map(d => d[1]))
+            Math.min(...yDomains.map(d => d[0])),
+            Math.max(...yDomains.map(d => d[1]))
         ];
 
         plot.scales.y.domain([min, max]);
@@ -325,21 +386,37 @@ export class Plotter {
     
     updatePaths(plot) {
         plot.lines.forEach(line => {
-            const [x, y] = [line.lttbData.time, line.lttbData[line.yKey]];
+            const [x, y] = [line.lttbData.data.time, line.lttbData.data[line.yKey]];
             const lineGen = d3.line()
                 .x((_, i) => plot.scales.x(x[i]))
                 .y((_, i) => plot.scales.y(y[i]))
                 .defined((_, i) => y[i] !== -1 && y[i] !== undefined);
 
             line.path
-                .datum(line.lttbData.time)
+                .datum(x)
                 .attr("d", lineGen);
         });
     }
     
     updateAxes(plot) {
-        plot.g.select(".y-axis").call(d3.axisLeft(plot.scales.y));
-        plot.g.select(".x-axis").call(d3.axisBottom(plot.scales.x));
+        plot.g.select(".y-axis")?.call(d3.axisLeft(plot.scales.y));
+        plot.g.select(".x-axis")?.call(d3.axisBottom(plot.scales.x));
+    }
+
+    overviewBrushed(event) {
+        if (!event.selection) return;
+        if (!this.overview) return;
+        if (this.isUpdatingOverview) return;
+
+        this.isUpdatingOverview = true;
+
+        const [x0, x1] = event.selection.map(this.overview.scales.x.invert);
+
+        this.viewDomain = [x0, x1];
+
+        this.updateLines();
+
+        this.isUpdatingOverview = false;
     }
 
     brushed(event) {
@@ -364,5 +441,31 @@ export class Plotter {
     resetZoom() {
         this.viewDomain = this.baseViewDomain;
         this.updateLines();
+    }
+}
+
+class BasePlot{
+
+    constructor ( { svg, g, scales, lines, plotConfig }){
+        this.svg = svg;
+        this.g = g;
+        this.scales = scales;
+        this.lines = lines;
+        this.plotConfig = plotConfig;
+    }
+}
+
+class OverviewPlot extends BasePlot {
+    constructor ( { svg, g, scales, lines, plotConfig, adjustBrush}){
+        super( { svg, g, scales, lines, plotConfig });
+        this.adjustBrush = adjustBrush;
+    }
+}
+
+class Line {
+    constructor({ path, lineGen, yKey }){
+        this.path = path;
+        this.lineGen = lineGen;
+        this.yKey = yKey;
     }
 }

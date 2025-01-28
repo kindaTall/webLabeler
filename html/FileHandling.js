@@ -1,6 +1,8 @@
-// fileSelector.js
+const DEFAULT_CACHE_SIZE = 5;  // Reasonable default cache size
+const PRELOAD_BEFORE = 1;
+const PRELOAD_AFTER = 1;
+
 import { api } from './api.js';
-import { DataContainer } from "./dataContainer.js";
 
 export class FileSelector {
     constructor(fileChangedCallback) {
@@ -67,7 +69,17 @@ export class FileSelector {
     handleFileChange() {
         if (!this.updateSelectedFile()) return;
         console.log("File changed to", this.selectedFile);
-        this.fileChangedCallback(this.selectedFile);
+        this.fileChangedCallback(this.selectedFile, this.determinePreloadFiles());
+    }
+
+    determinePreloadFiles(){
+        const index = this.getFileIndex(this.selectedFile);
+        const preloadFiles = [];
+        for (let i = index - PRELOAD_BEFORE; i <= index + PRELOAD_AFTER; i++) {
+            if (i < 1 || i >= this.fileList.length || i == index) continue;
+            preloadFiles.push(this.fileList[i].id);
+        }
+        return preloadFiles;
     }
 
     updateSelectedFile() {
@@ -79,9 +91,6 @@ export class FileSelector {
     }
 }
 
-// fileLoader.js
-
-const DEFAULT_CACHE_SIZE = 5;  // Reasonable default cache size
 
 export class FileLoader {
     constructor(maxCacheSize = DEFAULT_CACHE_SIZE) {
@@ -89,7 +98,11 @@ export class FileLoader {
         this.cache = new Map();
     }
 
-    async loadFile(fileId) {
+    async preloadFiles(fileIds){
+        fileIds.forEach(fileId => this.loadFile(fileId));
+    }
+
+    async loadFile(fileId, date=null) {
         // Return cached data if available
         if (this.cache.has(fileId)) {
             const metaContainer = this.cache.get(fileId);
@@ -98,19 +111,19 @@ export class FileLoader {
         }
 
         // Load and cache new data
-        const data = await api.getFile(fileId);
-        const container = new DataContainer(fileId, data.x, data.label, data.p);
-        
-        const metaContainer = {
-            lastAccessed: Date.now(),
-            data: container,
-            type: 'dataContainer'  // Keep type for future extensibility
-        };
-        
-        this.cache.set(fileId, metaContainer);
-        this.cleanupCache();
-        
-        return container;
+        const data = api.getFile(fileId)
+            .then(data => {
+                const metaContainer = {
+                    lastAccessed: date || Date.now(),
+                    data: data,
+                    type: 'raw'  // Keep type for future extensibility
+                };
+                this.cache.set(fileId, metaContainer);
+                this.cleanupCache();
+                return data;
+            });
+
+        return data;
     }
 
     cleanupCache() {

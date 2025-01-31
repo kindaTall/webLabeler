@@ -51,7 +51,25 @@ export class FileSelector {
             .text("Next")
             .on("click", () => this.changeSelectedFile(+1));
 
-        return {fileSelector, selectCol, btnCol};
+        const copyButton = btnCol.append("button")
+            .attr("class", "btn btn-outline-primary")
+            .text("Copy filename")
+            .on("click", () => this.copyToClipboard());
+
+        return {fileSelector, selectCol, btnCol, copyButton};
+    }
+
+    copyToClipboard() {
+        const filename = this.selectedFile;
+        navigator.clipboard.writeText(filename).then(() => {
+            console.log('Copied filename to clipboard:', filename)
+        });
+
+        // Show a tooltip
+        const tooltip = this.UIElements.copyButton.text("Copied!");
+        setTimeout(() => tooltip.text("Copy filename"), 1000);
+
+
     }
 
     getFileIndex(fileId) {

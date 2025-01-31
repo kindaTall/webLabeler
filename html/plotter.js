@@ -9,8 +9,6 @@ export class Plotter {
         this.config = config;
         this.labelingIndex = 0;
 
-        // Calculate dimensions
-        this.margin = { top: 20, right: 20, bottom: 30, left: 40 };
 
         // Create container first to get proper dimensions
         this.container = d3.select(`#${containerId}`).append('div')
@@ -19,6 +17,7 @@ export class Plotter {
             .style("overflow-y", "auto");
 
         // Calculate dimensions after container is created
+        this.margin = { top: 20, right: 20, bottom: 30, left: 40 };
         this.calculateDimensions();
 
         this.plots = [];
@@ -34,13 +33,14 @@ export class Plotter {
 
         this.baseViewDomain = [0, this.data.dataLong.time.at(-1)];
         this.viewDomain = this.baseViewDomain;
-        this.verticalLines = [];
 
-        this.setupUI();
+
+        const uiHeader = this.setupUI();
         this.createPlots();
-        this.updateLines();
         this.updatePlot(this.overview);
-        this.setupClickHandlers();
+        this.relabeler = new Relabeler({plots:this.plots, data:this.data, parent:this, uiHeader});
+
+        this.updateLines();
     }
 
     destroy() {
@@ -60,24 +60,7 @@ export class Plotter {
             .attr("class", "btn btn-outline-primary me-2")
             .text("Zoom Out")
             .on("click", () => this.resetZoom());
-
-        // add one radio button for each label, on click, change the labelingIndex
-        for (let i = 0; i < this.data.yConfigs.length; i++) {
-            const radioWrapper = header.append("div")
-                .attr("class", "form-check form-check-inline");
-
-            radioWrapper.append("input")
-                .attr("class", "form-check-input")
-                .attr("type", "radio")
-                .attr("name", "label")
-                .attr("value", i)
-                .attr("checked", i == 0 ? true : null)
-                .on("click", () => this.labelingIndex = i);
-
-            radioWrapper.append("label")
-                .attr("class", "form-check-label")
-                .text(`label ${i}`);
-        }
+        return header;
     }
 
     calculateDimensions() {
@@ -155,89 +138,17 @@ export class Plotter {
             ]);
         };
 
-        return new OverviewPlot({ svg, g, scales, lines, plotConfig, adjustBrush });
+        return new OverviewPlot({ svg, g, scales, lines, plotConfig, adjustBrush, shape:this.overviewShape, margin:this.margin});
     }
     
     createPlot(name, plotConfig) {
         const {svg, g, scales, lines} = this.createPlotArgs({plotConfig, shape:this.plotShape, name});
 
-
         g.append("g")
             .attr("class", "brush")
             .call(this.brush);
 
-        return new BasePlot({ svg, g, scales, lines, plotConfig });
-    }
-
-    setupClickHandlers() {
-        this.plots.forEach(plot => {
-            plot.svg.on("click", (event) => {
-                const plotElement = event.target.closest("svg");
-                const plotIndex = this.plots.findIndex(p => p.svg.node() === plotElement);
-                const plotIndex_ = this.plots.findIndex(p=>p==plot);
-
-                if (plotIndex < 0){ return;}
-                if (this.verticalLines.length === 2 && plotIndex !== 0) {return;}
-
-                const [x, y] = d3.pointer(event);
-
-                if (this.verticalLines.length < 2){
-                    const xValue = plot.scales.x.invert(x - this.margin.left);
-                    this.verticalLines.push(xValue);
-                    this.updateVerticalLines();
-                }
-
-                if (this.verticalLines.length === 2 && plotIndex === 0){
-                    const yValue = plot.scales.y.invert(y-this.margin.top);
-                    const label = Math.round(yValue*2)/2;
-                    const delta = Math.abs(yValue - label);
-                    if (delta > 0.1){
-                        console.log("Can't label with value too far from label points");
-                        this.updateVerticalLines();
-                        return;
-                    }
-                    console.log("labeling from", this.verticalLines[0], "to", this.verticalLines[1], "with", label);
-
-                    let indices = this.verticalLines.map(x=>Math.round(x*1395));
-                    this.data.updateLabels(this.labelingIndex, indices[0], indices[1], label);
-                    this.verticalLines = [];
-
-                    // delete cached lttb data on labeling plot
-                    this.plots[0].lines.forEach(line => {
-                        line.lttbData = null;
-                    });
-
-                    this.updateVerticalLines();
-                    this.updatePlot(this.plots[0]);
-                }
-            });
-        });
-    }
-
-    drawLine(x) {
-        this.verticalLines.push(x);
-        this.updateVerticalLines();
-    }
-
-    updateVerticalLines() {
-        this.plots.forEach(plot => {
-            // Remove existing vertical lines
-            plot.g.selectAll(".vertical-line").remove();
-
-            // Draw new lines
-            this.verticalLines.forEach(x => {
-                if (x >= this.viewDomain[0] && x <= this.viewDomain[1]) {
-                    plot.g.append("line")
-                        .attr("class", "vertical-line")
-                        .attr("x1", plot.scales.x(x))
-                        .attr("x2", plot.scales.x(x))
-                        .attr("y1", 0)
-                        .attr("y2", this.height)
-                        .attr("stroke", "red")
-                        .attr("stroke-width", 1);
-                }
-            });
-        });
+        return new BasePlot({ svg, g, scales, lines, plotConfig, shape:this.plotShape, margin:this.margin });
     }
 
     getPlotData(plotConfig) {
@@ -314,7 +225,7 @@ export class Plotter {
 
     updateLines() {
         this.plots.forEach(plot => this.updatePlot(plot));
-        this.updateVerticalLines();
+        this.relabeler.updateVerticalLines();
         this.overview.adjustBrush();
     }
 
@@ -444,14 +355,250 @@ export class Plotter {
     }
 }
 
+
+class Relabeler {
+    // Constants
+    static LABEL_VALUES = [
+        [0, 'label: 0'],
+        [0.5, 'label: unknown'],
+        [1, 'label: 1']
+    ];
+    static DATA_POINTS = 1395; // Magic number from indices calculation
+
+    constructor({plots, data, parent, uiHeader}) {
+        if (!Array.isArray(plots) || !plots.length) {
+            throw new Error('Plots array is required and must not be empty');
+        }
+        if (!data || !data.yConfigs) {
+            throw new Error('Data with yConfigs is required');
+        }
+
+        this.verticalLines = [];
+        this.labelingIndex = 0;
+        this.plots = plots;
+        this.data = data;
+        this.parent = parent;
+
+        this.labelLineOpacity = {
+            disabled: 0.1,
+            normal: 0.2,
+            hover: 0.5
+        };
+
+        // Initialize components
+        this.#setupLabelLines();
+        this.#setupClickHandlers();
+        this.#setupUI(uiHeader);
+    }
+
+    /**
+     * Initializes the horizontal label lines with their interactions
+     * @private
+     */
+    #setupLabelLines() {
+        this.labelLines = Relabeler.LABEL_VALUES.map(([label, title]) => {
+            const line = this.#addLine(
+                    this.plots[0],
+                    'label-line',
+                    {x1: 0, y1: label},
+                    {x2: this.parent.viewDomain[1], y2: label},
+                    "gray",
+                    this.#calculateLineWidth(),
+                    this.labelLineOpacity.disabled
+                )
+                .style("cursor", "crosshair")
+                .attr("title", title);
+
+            line.hovered = false;
+
+            this.#setupLineInteractions(line, label);
+            return line;
+        });
+    }
+
+    /**
+     * Sets up hover and click interactions for a label line
+     * @private
+     */
+    #setupLineInteractions(line, label) {
+        line
+            .on("mouseover", () => {
+                line.hovered = true;
+                this.#updateLineOpacity(line);
+            })
+            .on("mouseout", () => {
+                line.hovered = false;
+                this.#updateLineOpacity(line);
+            })
+            .on("click", (event) => {
+                this.#handleLabelLineClick(event, label);
+            });
+    }
+
+    /**
+     * Calculates appropriate line width based on plot height
+     * @private
+     */
+    #calculateLineWidth() {
+        return Math.max(1, Math.min(10, this.plots[0].shape.height / 14));
+    }
+
+    /**
+     * Updates opacity for a single line based on current state
+     */
+    #updateLineOpacity(line) {
+        const opacity = this.verticalLines.length
+            ? (line.hovered ? this.labelLineOpacity.hover : this.labelLineOpacity.normal)
+            : this.labelLineOpacity.disabled;
+        line.attr("opacity", opacity);
+    }
+
+    /**
+     * Updates all vertical lines across all plots
+     */
+    updateVerticalLines() {
+        this.plots.forEach(plot => {
+            plot.g.selectAll(".vertical-line").remove();
+
+            this.verticalLines
+                .filter(x => x >= this.parent.viewDomain[0] && x <= this.parent.viewDomain[1])
+                .forEach(x => {
+                    this.#addLine(
+                        plot,
+                        "vertical-line",
+                        {x1: x, y1: plot.scales.y.invert(0)},
+                        {x2: x, y2: plot.scales.y.invert(plot.shape.height)},
+                        "red",
+                        1,
+                        1
+                    );
+                });
+        });
+    }
+
+    /**
+     * Sets up click handlers for all plots
+     */
+    #setupClickHandlers() {
+        this.plots.forEach(plot => {
+            plot.svg.on("click", (event) => {
+                this.#handlePlotClick(event, plot);
+            });
+        });
+    }
+
+    /**
+     * Handles clicks on the plot area
+     */
+    #handlePlotClick(event, plot) {
+        if (this.verticalLines.length < 2) {
+            const xValue = plot.scales.x.invert(event.x - plot.margin.left);
+            this.#addVerticalLine(xValue);
+        }
+    }
+
+    /**
+     * Handles clicks on label lines
+     */
+    #handleLabelLineClick(event, value) {
+        event.stopPropagation();
+        this.#handlePlotClick(event, this.plots[0]);
+
+        if (this.verticalLines.length !== 2) return;
+
+        const indices = this.verticalLines.map(x =>
+            Math.round(x * Relabeler.DATA_POINTS)
+        );
+
+        this.#applyLabel(indices, value);
+    }
+
+    /**
+     * Applies the label and updates the visualization
+     * @private
+     */
+    #applyLabel(indices, value) {
+        this.data.updateLabels(this.labelingIndex, indices[0], indices[1], value);
+        this.#resetState();
+    }
+
+    /**
+     * Resets the state after labeling
+     * @private
+     */
+    #resetState() {
+        this.verticalLines = [];
+        this.labelLines.forEach(line => this.#updateLineOpacity(line));
+
+        // Clear cached data and update visualization
+        this.plots[0].lines.forEach(line => {
+            line.lttbData = null;
+        });
+
+        this.updateVerticalLines();
+        this.parent.updatePlot(this.plots[0]);
+    }
+
+    /**
+     * Adds a vertical line and updates the visualization
+     */
+    #addVerticalLine(x) {
+        this.verticalLines.push(x);
+        this.updateVerticalLines();
+        this.labelLines.forEach(line => this.#updateLineOpacity(line));
+    }
+
+    /**
+     * Sets up the UI controls
+     */
+    #setupUI(header) {
+        this.data.yConfigs.forEach((_, i) => {
+            const radioWrapper = header.append("div")
+                .attr("class", "form-check form-check-inline");
+
+            radioWrapper.append("input")
+                .attr("class", "form-check-input")
+                .attr("type", "radio")
+                .attr("name", "label")
+                .attr("value", i)
+                .attr("checked", i === 0 ? true : null)
+                .on("click", () => this.labelingIndex = i);
+
+            radioWrapper.append("label")
+                .attr("class", "form-check-label")
+                .text(`label ${i}`);
+        });
+    }
+
+    /**
+     * Helper method to add a line to a plot
+     * @private
+     */
+    #addLine(plot, classList, {x1, y1}, {x2, y2}, stroke="red", strokeWidth=1, opacity=1) {
+        return plot.g.append("line")
+            .attr("class", classList)
+            .attr("x1", plot.scales.x(x1))
+            .attr("x2", plot.scales.x(x2))
+            .attr("y1", plot.scales.y(y1))
+            .attr("y2", plot.scales.y(y2))
+            .attr("stroke", stroke)
+            .attr("stroke-width", strokeWidth)
+            .attr("opacity", opacity);
+    }
+}
+
+
 class BasePlot{
 
-    constructor ( { svg, g, scales, lines, plotConfig }){
+    constructor ( { svg, g, scales, lines, plotConfig, shape, margin }){
         this.svg = svg;
         this.g = g;
         this.scales = scales;
         this.lines = lines;
         this.plotConfig = plotConfig;
+
+        this.shape = shape;
+        this.margin = margin;
     }
 }
 

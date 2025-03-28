@@ -3,6 +3,7 @@ from flask import Flask, send_from_directory, jsonify, Response, request
 import os
 from pathlib import Path
 from db_interface import MockDB, DBInterface
+import json
 
 from waitress import serve
 import logging
@@ -65,6 +66,33 @@ def update_labels():
 
         return jsonify({"status": "success"})
 
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/filter-presets', methods=['GET'])
+def get_filter_presets():
+    try:
+        presets_path = Path(app.db.root_dir) / 'filter_presets.json'
+        if not presets_path.exists():
+            return jsonify([])
+        with open(presets_path, 'r') as f:
+            return jsonify(json.load(f))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/filter-presets', methods=['POST'])
+def save_filter_presets():
+    try:
+        presets = request.json.get('presets')
+        if not presets:
+            return jsonify({"error": "No presets provided"}), 400
+
+        presets_path = Path(app.db.root_dir) / 'filter_presets.json'
+        with open(presets_path, 'w') as f:
+            json.dump(presets, f, indent=2)
+
+        return jsonify({"status": "success"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

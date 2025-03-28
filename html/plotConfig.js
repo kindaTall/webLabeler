@@ -3,25 +3,37 @@ const DEFAULT_CONFIG = {
         "Label": {
             "series": {
                 "labels[0]": {
-                    xKey: "t",
                     yKey: "labels.0",
                     style: { strokeWidth: 4, color: "red" }
                 },
                 "probabilities[0]": {
-                    xKey: "t_probabilities",
                     yKey: "probabilities.0",
                     style: { strokeWidth: 1.5, color: "red" }
                 },
                 "labels[1]": {
-                    xKey: "t",
                     yKey: "labels.1",
                     style: { strokeWidth: 4, color: "blue" }
                 },
                 "probabilities[1]": {
-                    xKey: "t_probabilities",
                     yKey: "probabilities.1",
                     style: { strokeWidth: 1.5, color: "blue" }
-                }
+                },
+                "labels[2]": {
+                    yKey: "labels.2",
+                    style: { strokeWidth: 4, color: "green" }
+                },
+                "probabilities[2]": {
+                    yKey: "probabilities.2",
+                    style: { strokeWidth: 1.5, color: "green" }
+                },
+//                "labels[3]": {
+//                    yKey: "labels.3",
+//                    style: { strokeWidth: 4, color: "purple" }
+//                },
+//                "probabilities[3]": {
+//                    yKey: "probabilities.3",
+//                    style: { strokeWidth: 1.5, color: "purple" }
+//                }
             },
             "scaling": {
                 "autoScale": false,
@@ -33,8 +45,7 @@ const DEFAULT_CONFIG = {
         "Signal": {
             "series": {
                 "signal": {
-                    xKey: "t",
-                    yKey: "signal"
+                    yKey: "signalFiltered"
                 }
             },
             "scaling": {
@@ -47,7 +58,6 @@ const DEFAULT_CONFIG = {
         "Integral": {
             "series": {
                 "integral": {
-                    xKey: "t",
                     yKey: "integral"
                 }
             },
@@ -61,7 +71,6 @@ const DEFAULT_CONFIG = {
         "Noise": {
             "series": {
                 "noise": {
-                    xKey: "t",
                     yKey: "noise"
                 }
             },
@@ -89,12 +98,10 @@ class SeriesStyle {
 
 class SeriesConfig {
     constructor({
-        xKey,
         yKey,
         style = {}
     }) {
-        if (!xKey || !yKey) throw new Error("xKey and yKey required");
-        this.xKey = xKey;
+        if (!yKey) throw new Error("yKey required");
         this.yKey = yKey;
         this.style = new SeriesStyle(style);
     }

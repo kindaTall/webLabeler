@@ -1,5 +1,6 @@
 import {DataContainer} from "./dataContainer.js";
-import { PlotConfig } from './plotConfig.js'
+import { PlotConfig } from './plotConfig.js';
+import { FilterManager } from "./filterManager.js";
 
 
 export class Plotter {
@@ -37,8 +38,14 @@ export class Plotter {
 
         const uiHeader = this.setupUI();
         this.createPlots();
-        this.updatePlot(this.overview);
+        this.overview.update();
         this.relabeler = new Relabeler({plots:this.plots, data:this.data, parent:this, uiHeader});
+        this.filterManager = new FilterManager({plots:this.plots, header:uiHeader, data:this.data});
+        
+        // Subscribe to filter changes
+        // this.plots[this.filterManager.targetPlotIndex].lines.forEach(line => {
+        //     line.onDataFiltered = () => this.plots[this.filterManager.targetPlotIndex].update();
+        // });
 
         this.updateLines();
     }
@@ -87,7 +94,7 @@ export class Plotter {
         }
     }
 
-    createPlotArgs({plotConfig, shape, name=null, axis=true, }){
+    createPlotArgs({plotConfig, shape, name=null, axis=true, }) {
         const svg = this.container.append("svg")
             .attr("width", shape.width + this.margin.left + this.margin.right)
             .attr("height", shape.height + this.margin.top + this.margin.bottom)
@@ -96,8 +103,8 @@ export class Plotter {
         const g = svg.append("g")
             .attr("transform", `translate(${this.margin.left},${this.margin.top})`);
 
-        if (name){
-             svg.append("text")
+        if (name) {
+            svg.append("text")
                 .attr("x", shape.width / 2 + this.margin.left)
                 .attr("y", this.margin.top / 2)
                 .attr("text-anchor", "middle")
@@ -107,8 +114,8 @@ export class Plotter {
         const plotData = this.getPlotData(plotConfig);
         const scales = this.createScales({xDomain: this.baseViewDomain, yDomain:plotData.yDomain}, shape);
 
-        if (axis){
-           // Create axes
+        if (axis) {
+            // Create axes
             this.createAxes(g, scales, shape.height);
         }
 
@@ -138,7 +145,7 @@ export class Plotter {
             ]);
         };
 
-        return new OverviewPlot({ svg, g, scales, lines, plotConfig, adjustBrush, shape:this.overviewShape, margin:this.margin});
+        return new OverviewPlot({ svg, g, scales, lines, plotConfig, shape: this.overviewShape, margin: this.margin, parent: this,  adjustBrush: adjustBrush,});
     }
     
     createPlot(name, plotConfig) {
@@ -148,7 +155,7 @@ export class Plotter {
             .attr("class", "brush")
             .call(this.brush);
 
-        return new BasePlot({ svg, g, scales, lines, plotConfig, shape:this.plotShape, margin:this.margin });
+        return new BasePlot({ svg, g, scales, lines, plotConfig, shape:this.plotShape, margin:this.margin, parent:this});
     }
 
     getPlotData(plotConfig) {
@@ -224,96 +231,12 @@ export class Plotter {
     }
 
     updateLines() {
-        this.plots.forEach(plot => this.updatePlot(plot));
+        this.plots.forEach(plot => plot.update());
         this.relabeler.updateVerticalLines();
         this.overview.adjustBrush();
     }
 
-    updatePlot(plot){
-        this.gatherLTTBData(plot);
-        this.updatePlotScaleDomain(plot);
-        this.updatePaths(plot);
-        this.updateAxes(plot);
-    }
-    
-    gatherLTTBData(plot) {
-        const [x0, x1] = this.viewDomain;
-        plot.lines.forEach(line => {
-            const container = this.data.getContainer(line.yKey);
-            const [start, stop] = this.calculateIndexRange(container, x0, x1);
-            if (line?.lttbData?.bounds.start == start && line?.lttbData?.bounds.stop == stop) return;
-            line.lttbData = {
-                bounds : {start, stop},
-                data : largestTriangleThreeBucketsRF(
-                    {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
-                    this.width,
-                    'time',
-                    line.yKey
-                )
-            };
-        });
-    }
-    
-    calculateIndexRange(container, x0, x1) {
-        const c = container.time[0];
-        const m = container.time[1] - container.time[0];
-        return [x0, x1].map(a => 
-            Math.max(0, Math.min(container.time.length, Math.round((a - c) / m)))
-        );
-    }
-    
-    updatePlotScaleDomain(plot) {
-        plot.scales.x.domain(this.viewDomain);
-
-        if (!plot.plotConfig.scalingConfig.autoScale) return;
-
-        const yDomains = plot.lines.map(line =>
-            this.calculateYScaleSingle(line.lttbData.data, line.yKey, plot.plotConfig.scalingConfig)
-        );
-        const [min, max] = [
-            Math.min(...yDomains.map(d => d[0])),
-            Math.max(...yDomains.map(d => d[1]))
-        ];
-
-        plot.scales.y.domain([min, max]);
-    }
-
-    calculateYScaleSingle(array, key, scalingConfig){
-        const [q05, q95] = [d3.quantile(array[key], scalingConfig.quantileRange.lower),
-                            d3.quantile(array[key], scalingConfig.quantileRange.upper)];
-        const [min, max] = [d3.min(array[key]), d3.max(array[key])];
-        return this.calculateExpandedRange(q05, q95, min, max, scalingConfig);
-    }
-    
-    calculateExpandedRange(min, max, q05, q95, scalingConfig) {
-        const range = q95 - q05;
-        const expandedMin = q05 - range * scalingConfig.expansionFactor;
-        const expandedMax = q95 + range * scalingConfig.expansionFactor;
-        return [
-            Math.max(min, expandedMin),
-            Math.min(max, expandedMax)
-        ];
-    }
-    
-    updatePaths(plot) {
-        plot.lines.forEach(line => {
-            const [x, y] = [line.lttbData.data.time, line.lttbData.data[line.yKey]];
-            const lineGen = d3.line()
-                .x((_, i) => plot.scales.x(x[i]))
-                .y((_, i) => plot.scales.y(y[i]))
-                .defined((_, i) => y[i] !== -1 && y[i] !== undefined);
-
-            line.path
-                .datum(x)
-                .attr("d", lineGen);
-        });
-    }
-    
-    updateAxes(plot) {
-        plot.g.select(".y-axis")?.call(d3.axisLeft(plot.scales.y));
-        plot.g.select(".x-axis")?.call(d3.axisBottom(plot.scales.x));
-    }
-
+   
     overviewBrushed(event) {
         if (!event.selection) return;
         if (!this.overview) return;
@@ -332,7 +255,7 @@ export class Plotter {
 
     brushed(event) {
         if (!event.selection) return;
-        if (event.selection[1] - event.selection[0] < 4){
+        if (event.selection[1] - event.selection[0] < 4) {
             this.container.selectAll(".brush").call(this.brush.move, null);
             return;
         }
@@ -536,7 +459,7 @@ class Relabeler {
         });
 
         this.updateVerticalLines();
-        this.parent.updatePlot(this.plots[0]);
+        this.plots[0].update();
     }
 
     /**
@@ -588,9 +511,9 @@ class Relabeler {
 }
 
 
-class BasePlot{
+class BasePlot {
 
-    constructor ( { svg, g, scales, lines, plotConfig, shape, margin }){
+    constructor ( { svg, g, scales, lines, plotConfig, shape, margin, parent }) {
         this.svg = svg;
         this.g = g;
         this.scales = scales;
@@ -599,18 +522,107 @@ class BasePlot{
 
         this.shape = shape;
         this.margin = margin;
+        
+        this.parent = parent;
     }
+
+    update() {
+        // required data for update, to be able to refactor to plot class: this.viewDomain, this.data, this.width
+        this.gatherLTTBData();
+        this.updatePlotScaleDomain();
+        this.updatePaths();
+        this.updateAxes();
+    }
+    
+    gatherLTTBData() {
+        const [x0, x1] = this.parent.viewDomain;
+        this.lines.forEach(line => {
+            const container = this.parent.data.getContainer(line.yKey);
+            const [start, stop] = this.calculateIndexRange(container, x0, x1);
+            if (line?.lttbData?.bounds.start == start && line?.lttbData?.bounds.stop == stop) return;
+            line.lttbData = {
+                bounds : {start, stop},
+                data : largestTriangleThreeBucketsRF(
+                    {[line.yKey]: container[line.yKey].slice(start, stop), time: container.time.slice(start, stop)},
+                    this.parent.width,
+                    'time',
+                    line.yKey
+                )
+            };
+        });
+    }
+    
+    calculateIndexRange(container, x0, x1) {
+        const c = container.time[0];
+        const m = container.time[1] - container.time[0];
+        return [x0, x1].map(a => 
+            Math.max(0, Math.min(container.time.length, Math.round((a - c) / m)))
+        );
+    }
+    
+    updatePlotScaleDomain() {
+        this.scales.x.domain(this.parent.viewDomain);
+
+        if (!this.plotConfig.scalingConfig.autoScale) return;
+
+        const yDomains = this.lines.map(line =>
+            this.calculateYScaleSingle(line.lttbData.data, line.yKey, this.plotConfig.scalingConfig)
+        );
+        const [min, max] = [
+            Math.min(...yDomains.map(d => d[0])),
+            Math.max(...yDomains.map(d => d[1]))
+        ];
+
+        this.scales.y.domain([min, max]);
+    }
+
+    calculateYScaleSingle(array, key, scalingConfig) {
+        const [q05, q95] = [d3.quantile(array[key], scalingConfig.quantileRange.lower),
+                            d3.quantile(array[key], scalingConfig.quantileRange.upper)];
+        const [min, max] = [d3.min(array[key]), d3.max(array[key])];
+        return this.calculateExpandedRange(q05, q95, min, max, scalingConfig);
+    }
+    
+    calculateExpandedRange(min, max, q05, q95, scalingConfig) {
+        const range = q95 - q05;
+        const expandedMin = q05 - range * scalingConfig.expansionFactor;
+        const expandedMax = q95 + range * scalingConfig.expansionFactor;
+        return [
+            Math.max(min, expandedMin),
+            Math.min(max, expandedMax)
+        ];
+    }
+    
+    updatePaths() {
+        this.lines.forEach(line => {
+            const [x, y] = [line.lttbData.data.time, line.lttbData.data[line.yKey]];
+            const lineGen = d3.line()
+                .x((_, i) => this.scales.x(x[i]))
+                .y((_, i) => this.scales.y(y[i]))
+                .defined((_, i) => y[i] !== -1 && y[i] !== undefined);
+
+            line.path
+                .datum(x)
+                .attr("d", lineGen);
+        });
+    }
+    
+    updateAxes() {
+        this.g.select(".y-axis")?.call(d3.axisLeft(this.scales.y));
+        this.g.select(".x-axis")?.call(d3.axisBottom(this.scales.x));
+    }
+
 }
 
 class OverviewPlot extends BasePlot {
-    constructor ( { svg, g, scales, lines, plotConfig, adjustBrush}){
-        super( { svg, g, scales, lines, plotConfig });
+    constructor ( { svg, g, scales, lines, plotConfig, adjustBrush, shape, margin, parent}) {
+        super( { svg, g, scales, lines, plotConfig, shape, margin, parent, adjustBrush });
         this.adjustBrush = adjustBrush;
     }
 }
 
 class Line {
-    constructor({ path, lineGen, yKey }){
+    constructor({ path, lineGen, yKey }) {
         this.path = path;
         this.lineGen = lineGen;
         this.yKey = yKey;

@@ -50,6 +50,20 @@ class APIService {
         return await response.json();
     }
 
+    async getFilterPresets() {
+        const response = await fetch(`${this.baseURL}/filter-presets`);
+        return await response.json();
+    }
+
+    async saveFilterPresets(presets) {
+        const response = await fetch(`${this.baseURL}/filter-presets`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ presets })
+        });
+        return await response.json();
+    }
+
 }
 
 export const api = new APIService();

@@ -23,6 +23,7 @@ class DataContainer {
 
         this.filename = filename;
         this.signal = SignalProcessor.zeroMean(signal);
+        this.signalFiltered = this.signal;
         this.yConfigs = yConfigs.map(DataContainer.fixYConfig);
         this.probabilities = probabilities;
 
@@ -49,6 +50,9 @@ class DataContainer {
         }
         if (key === 'signal') {
             return SignalProcessor.calculateMetaDataFromArray(this.signal);
+        }
+        if (key === 'signalFiltered') {
+            return SignalProcessor.calculateMetaDataFromArray(this.signalFiltered);
         }
         if (key === 'integral') {
             return SignalProcessor.calculateMetaDataFromArray(this.dataLong.integral);
@@ -84,6 +88,7 @@ class DataContainer {
         const data = {
             time: time,
             signal: signal,
+            signalFiltered: signal,
             integral: SignalProcessor.cumsum(signal)
         };
 
